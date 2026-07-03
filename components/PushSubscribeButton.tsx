@@ -1,7 +1,8 @@
 "use client";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { urlBase64ToUint8Array } from "@/utils/push";
+import { getFirebaseMessaging } from "@/lib/firebase";
+import { getToken } from "firebase/messaging";
 
 type Props = {
   restaurantId: string;
@@ -16,16 +17,6 @@ export default function PushSubscribeButton({ restaurantId }: Props) {
       return;
     }
 
-    if (!("serviceWorker" in navigator)) {
-      alert("Bu brauzer push notification dəstəkləmir.");
-      return;
-    }
-
-    if (!("PushManager" in window)) {
-      alert("Bu cihaz push notification dəstəkləmir.");
-      return;
-    }
-
     const permission = await Notification.requestPermission();
 
     if (permission !== "granted") {
@@ -33,16 +24,28 @@ export default function PushSubscribeButton({ restaurantId }: Props) {
       return;
     }
 
-    const registration = await navigator.serviceWorker.register("/sw.js");
+    const messaging = await getFirebaseMessaging();
 
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(
-        process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!
-      ),
+    if (!messaging) {
+      alert("Bu cihaz bildirişləri dəstəkləmir.");
+      return;
+    }
+
+    const registration = await navigator.serviceWorker.register(
+      "/firebase-messaging-sw.js"
+    );
+
+    const token = await getToken(messaging, {
+      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY!,
+      serviceWorkerRegistration: registration,
     });
 
-    const res = await fetch("/api/push/subscribe", {
+    if (!token) {
+      alert("FCM token alınmadı.");
+      return;
+    }
+
+    const res = await fetch("/api/fcm/save-token", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -50,7 +53,7 @@ export default function PushSubscribeButton({ restaurantId }: Props) {
       body: JSON.stringify({
         userId: profile.id,
         restaurantId,
-        subscription,
+        token,
       }),
     });
 
