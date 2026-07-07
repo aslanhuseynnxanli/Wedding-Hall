@@ -35,6 +35,7 @@ export class ServiceRequestRepository {
         )
       `)
       .eq("restaurant_id", restaurantId)
+      .neq("status", "COMPLETED")
       .order("created_at", { ascending: false });
 
     if (error) throw new Error(error.message);
@@ -70,6 +71,7 @@ export class ServiceRequestRepository {
       `)
       .eq("restaurant_id", restaurantId)
       .in("table_id", tableIds)
+      .neq("status", "COMPLETED")
       .order("created_at", { ascending: false });
 
     if (error) throw new Error(error.message);
@@ -77,22 +79,66 @@ export class ServiceRequestRepository {
     return data;
   }
 
-  static async updateStatus(
-    id: string,
-    status: "NEW" | "ACCEPTED" | "COMPLETED" | "CANCELLED"
-  ) {
+  static async getLogsByRestaurant(restaurantId: string) {
     const { data, error } = await supabaseAdmin
       .from("service_requests")
-      .update({
-        status,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id)
+      .select(`
+        *,
+        halls (
+          id,
+          name
+        ),
+        restaurant_tables (
+          id,
+          table_number
+        ),
+        accepted_profile:accepted_by (
+          id,
+          full_name
+        ),
+        completed_profile:completed_by (
+          id,
+          full_name
+        )
+      `)
+      .eq("restaurant_id", restaurantId)
+      .eq("status", "COMPLETED")
+      .order("completed_at", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return data;
+  }
+
+  static async updateStatus(data: {
+    id: string;
+    status: "NEW" | "ACCEPTED" | "COMPLETED" | "CANCELLED";
+    userId?: string;
+  }) {
+    const updateData: any = {
+      status: data.status,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (data.status === "ACCEPTED") {
+      updateData.accepted_by = data.userId || null;
+      updateData.accepted_at = new Date().toISOString();
+    }
+
+    if (data.status === "COMPLETED") {
+      updateData.completed_by = data.userId || null;
+      updateData.completed_at = new Date().toISOString();
+    }
+
+    const { data: request, error } = await supabaseAdmin
+      .from("service_requests")
+      .update(updateData)
+      .eq("id", data.id)
       .select("*")
       .single();
 
     if (error) throw new Error(error.message);
 
-    return data;
+    return request;
   }
 }

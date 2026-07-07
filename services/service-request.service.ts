@@ -19,10 +19,15 @@ export class ServiceRequestService {
     return await ServiceRequestRepository.getByRestaurant(restaurantId);
   }
 
-  static async updateStatus(
-    id: string,
-    status: "NEW" | "ACCEPTED" | "COMPLETED" | "CANCELLED"
-  ) {
-    return await ServiceRequestRepository.updateStatus(id, status);
+  static async getRestaurantLogs(restaurantId: string) {
+    return await ServiceRequestRepository.getLogsByRestaurant(restaurantId);
+  }
+
+  static async updateStatus(data: {
+    id: string;
+    status: "NEW" | "ACCEPTED" | "COMPLETED" | "CANCELLED";
+    userId?: string;
+  }) {
+    return await ServiceRequestRepository.updateStatus(data);
   }
 }

@@ -53,7 +53,7 @@ export default function ServiceRequestsPage() {
     const newRequests = list.filter((x: any) => x.status === "NEW").length;
 
     if (previousCount.current !== 0 && newRequests > previousCount.current) {
-      audioRef.current?.play().catch(() => {});
+      audioRef.current?.play().catch(() => { });
     }
 
     previousCount.current = newRequests;
@@ -66,7 +66,11 @@ export default function ServiceRequestsPage() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ id, status }),
+      body: JSON.stringify({
+        id,
+        status,
+        userId: profile?.id,
+      }),
     });
 
     const data = await res.json();
@@ -142,13 +146,12 @@ export default function ServiceRequestsPage() {
           {requests.map((request) => (
             <div
               key={request.id}
-              className={`rounded-xl shadow-lg p-5 text-white ${
-                request.status === "NEW"
+              className={`rounded-xl shadow-lg p-5 text-white ${request.status === "NEW"
                   ? "bg-red-500"
                   : request.status === "ACCEPTED"
-                  ? "bg-yellow-500"
-                  : "bg-green-600"
-              }`}
+                    ? "bg-yellow-500"
+                    : "bg-green-600"
+                }`}
             >
               <div className="flex justify-between items-start">
                 <h2 className="font-bold text-2xl">{request.request_type}</h2>
