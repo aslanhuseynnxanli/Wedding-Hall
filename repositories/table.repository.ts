@@ -42,7 +42,8 @@ export class TableRepository {
       restaurants (
         id,
         name,
-        slug
+        slug,
+        service_fee_percent
       )
     `)
     .eq("qr_token", token)
