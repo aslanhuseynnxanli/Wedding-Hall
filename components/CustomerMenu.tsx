@@ -200,84 +200,120 @@ export default function CustomerMenu({
   }
 
   async function submitOrder() {
-    if (cartLines.length === 0) {
-      setErrorMessage("Səbət boşdur.");
-      return;
-    }
+  if (cartLines.length === 0) {
+    setErrorMessage("Səbət boşdur.");
+    return;
+  }
+
+  try {
+    setSubmitting(true);
+    setErrorMessage(null);
+    setOrderResult(null);
+
+    const apiUrl =
+      `/api/table/${encodeURIComponent(token)}/order`;
+
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        items: cartLines.map((line) => ({
+          menuItemId: line.item.id,
+          quantity: line.quantity,
+          note: null,
+        })),
+        customerNote:
+          customerNote.trim() || null,
+      }),
+    });
+
+    const responseText = await response.text();
+
+    console.log("ORDER API URL:", apiUrl);
+    console.log("ORDER API STATUS:", response.status);
+    console.log("ORDER API RESPONSE:", responseText);
+
+    let result: {
+      success?: boolean;
+      error?: string;
+      orderId?: string;
+      sessionId?: string;
+      subtotal?: number;
+      serviceFeeAmount?: number;
+      total?: number;
+    } | null = null;
 
     try {
-      setSubmitting(true);
-      setErrorMessage(null);
-      setOrderResult(null);
+      result = responseText
+        ? JSON.parse(responseText)
+        : null;
+    } catch {
+      result = null;
+    }
 
-      const response = await fetch(
-        `/api/table/${encodeURIComponent(
-          token,
-        )}/order`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            items: cartLines.map(
-              (line) => ({
-                menuItemId: line.item.id,
-                quantity: line.quantity,
-              }),
-            ),
-            customerNote:
-              customerNote.trim() || null,
-          }),
-        },
-      );
+    if (!response.ok) {
+      if (result?.error) {
+        throw new Error(result.error);
+      }
 
-      const result = await response
-        .json()
-        .catch(() => null);
-
-      if (!response.ok) {
+      if (response.status === 404) {
         throw new Error(
-          result?.error ||
-            "Sifariş göndərilmədi.",
+          "Sifariş API route-u tapılmadı. app/api/table/[token]/order/route.ts yolunu yoxlayın.",
         );
       }
 
-      setOrderResult({
-        orderId: result.orderId,
-        sessionId: result.sessionId,
-        subtotal: Number(
-          result.subtotal,
-        ),
-        serviceFeeAmount: Number(
-          result.serviceFeeAmount,
-        ),
-        total: Number(result.total),
-      });
-
-      clearCart();
-      setCartOpen(false);
-
-      window.scrollTo({
-        top: 0,
-        behavior: "smooth",
-      });
-    } catch (error) {
-      console.error(
-        "Submit customer order error:",
-        error,
+      throw new Error(
+        `Sifariş API xətası: HTTP ${response.status}. ` +
+          (responseText
+            ? responseText.slice(0, 250)
+            : "Server boş cavab qaytardı."),
       );
-
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Sifariş göndərilmədi.",
-      );
-    } finally {
-      setSubmitting(false);
     }
+
+    if (
+      !result?.orderId ||
+      !result?.sessionId
+    ) {
+      throw new Error(
+        "Server sifariş nəticəsini düzgün qaytarmadı.",
+      );
+    }
+
+    setOrderResult({
+      orderId: result.orderId,
+      sessionId: result.sessionId,
+      subtotal: Number(result.subtotal ?? 0),
+      serviceFeeAmount: Number(
+        result.serviceFeeAmount ?? 0,
+      ),
+      total: Number(result.total ?? 0),
+    });
+
+    setQuantities({});
+    setCustomerNote("");
+    setCartOpen(false);
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  } catch (error) {
+    console.error(
+      "Submit customer order error:",
+      error,
+    );
+
+    setErrorMessage(
+      error instanceof Error
+        ? error.message
+        : "Sifariş göndərilmədi.",
+    );
+  } finally {
+    setSubmitting(false);
   }
+}
 
   if (categories.length === 0) {
     return (
