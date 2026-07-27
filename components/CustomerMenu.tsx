@@ -112,7 +112,7 @@ export default function CustomerMenu({
       })
       .filter(Boolean) as CartLine[];
   }, [cart, allProducts]);
-    const cartCount = useMemo(
+  const cartCount = useMemo(
     () => cartLines.reduce((sum, item) => sum + item.quantity, 0),
     [cartLines]
   );
@@ -218,9 +218,11 @@ export default function CustomerMenu({
           },
           body: JSON.stringify({
             items: cartLines.map((item) => ({
-              menu_item_id: item.id,
+              menuItemId: item.id,
               quantity: item.quantity,
+              note: null,
             })),
+            customerNote: null,
           }),
         }
       );
@@ -230,8 +232,8 @@ export default function CustomerMenu({
       if (!response.ok) {
         throw new Error(
           result?.error ??
-            result?.message ??
-            "Sifariş göndərilmədi."
+          result?.message ??
+          "Sifariş göndərilmədi."
         );
       }
 
@@ -250,7 +252,7 @@ export default function CustomerMenu({
       setSending(false);
     }
   }
-    return (
+  return (
     <>
       <main className="mx-auto min-h-screen max-w-lg bg-neutral-50 pb-36">
 
@@ -351,7 +353,7 @@ export default function CustomerMenu({
           ))}
 
         </div>
-              </main>
+      </main>
 
       <CartSheet
         open={cartOpen}
