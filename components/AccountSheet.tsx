@@ -1,167 +1,704 @@
 "use client";
 
 import {
-  X,
-  Store,
-  Armchair,
-  MapPin,
-  Clock3,
-  Info,
+    AlertCircle,
+    Ban,
+    ChefHat,
+    CheckCircle2,
+    Clock3,
+    Loader2,
+    ReceiptText,
+    RefreshCw,
+    Store,
+    UtensilsCrossed,
+    WalletCards,
+    X,
 } from "lucide-react";
 
+interface CustomerSessionItem {
+    id: string;
+    menuItemId: string | null;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+    note: string | null;
+    preparationArea: string;
+    status: string;
+    canCancel: boolean;
+    createdAt: string;
+    startedAt: string | null;
+    readyAt: string | null;
+    servedAt: string | null;
+    cancelledAt: string | null;
+}
+
+interface CustomerSessionOrder {
+    id: string;
+    status: string;
+    customerNote: string | null;
+    submittedAt: string | null;
+    createdAt: string;
+    items: CustomerSessionItem[];
+}
+
+interface CustomerSessionResponse {
+    hasActiveSession: boolean;
+
+    table: {
+        id: string;
+        number: string;
+    };
+
+    session: {
+        id: string;
+        status: string;
+        createdAt: string;
+        updatedAt: string;
+        billRequestedAt: string | null;
+        billReadyAt: string | null;
+        billDeliveredAt: string | null;
+    } | null;
+
+    orders: CustomerSessionOrder[];
+
+    summary: {
+        subtotal: number;
+        serviceFeePercent: number;
+        serviceFeeAmount: number;
+        total: number;
+    };
+}
+
 interface Props {
-  open: boolean;
-  restaurantName: string;
-  tableName: string;
-  hallName?: string | null;
-  address?: string | null;
-  onClose: () => void;
+    open: boolean;
+    restaurantName: string;
+    tableName: string;
+    hallName?: string | null;
+    address?: string | null;
+    sessionData: CustomerSessionResponse | null;
+    loading: boolean;
+    error: string | null;
+    onRefresh: () => void | Promise<void>;
+    onClose: () => void;
 }
 
-interface InfoRowProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
+type StatusView = {
+    label: string;
+    className: string;
+    icon: React.ReactNode;
+};
+
+function formatMoney(value: number) {
+    return `${Number(value || 0).toFixed(2)} ₼`;
 }
 
-function InfoRow({ icon, label, value }: InfoRowProps) {
-  return (
-    <div className="flex items-center gap-4 rounded-2xl bg-neutral-50 p-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-neutral-900 shadow-sm">
-        {icon}
-      </div>
+function formatDate(value: string | null | undefined) {
+    if (!value) return null;
 
-      <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-400">
-          {label}
-        </p>
+    const date = new Date(value);
 
-        <p className="mt-1 truncate font-bold text-neutral-900">
-          {value}
-        </p>
-      </div>
-    </div>
-  );
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return new Intl.DateTimeFormat("az-AZ", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+    }).format(date);
+}
+
+function getItemStatus(status: string): StatusView {
+    switch (status) {
+        case "NEW":
+            return {
+                label: "Qəbul gözləyir",
+                className:
+                    "border-amber-200 bg-amber-50 text-amber-700",
+                icon: <Clock3 size={14} />,
+            };
+
+        case "PREPARING":
+        case "IN_PROGRESS":
+            return {
+                label: "Hazırlanır",
+                className:
+                    "border-blue-200 bg-blue-50 text-blue-700",
+                icon: <ChefHat size={14} />,
+            };
+
+        case "READY":
+            return {
+                label: "Hazırdır",
+                className:
+                    "border-emerald-200 bg-emerald-50 text-emerald-700",
+                icon: <CheckCircle2 size={14} />,
+            };
+
+        case "SERVED":
+            return {
+                label: "Təqdim edildi",
+                className:
+                    "border-neutral-200 bg-neutral-100 text-neutral-700",
+                icon: <UtensilsCrossed size={14} />,
+            };
+
+        case "CANCELLED":
+            return {
+                label: "Ləğv edildi",
+                className:
+                    "border-red-200 bg-red-50 text-red-700",
+                icon: <Ban size={14} />,
+            };
+
+        default:
+            return {
+                label: status || "Naməlum",
+                className:
+                    "border-neutral-200 bg-neutral-100 text-neutral-600",
+                icon: <Clock3 size={14} />,
+            };
+    }
+}
+
+function getSessionStatus(status: string) {
+    switch (status) {
+        case "OPEN":
+            return {
+                label: "Hesab açıqdır",
+                className: "bg-emerald-400 text-emerald-950",
+            };
+
+        case "BILL_REQUESTED":
+            return {
+                label: "Hesab istənilib",
+                className: "bg-amber-300 text-amber-950",
+            };
+
+        case "BILL_READY":
+            return {
+                label: "Hesab hazırdır",
+                className: "bg-blue-300 text-blue-950",
+            };
+
+        case "BILL_DELIVERED":
+            return {
+                label: "Hesab təqdim edilib",
+                className: "bg-violet-300 text-violet-950",
+            };
+
+        default:
+            return {
+                label: status,
+                className: "bg-white/15 text-white",
+            };
+    }
+}
+
+function LoadingContent() {
+    return (
+        <div className="space-y-4 py-2">
+            <div className="h-44 animate-pulse rounded-[30px] bg-neutral-200" />
+
+            <div className="space-y-3">
+                <div className="h-24 animate-pulse rounded-3xl bg-neutral-100" />
+                <div className="h-24 animate-pulse rounded-3xl bg-neutral-100" />
+                <div className="h-32 animate-pulse rounded-3xl bg-neutral-100" />
+            </div>
+        </div>
+    );
+}
+
+function EmptyAccount({
+    restaurantName,
+    tableName,
+}: {
+    restaurantName: string;
+    tableName: string;
+}) {
+    return (
+        <div className="py-3">
+            <div className="relative overflow-hidden rounded-[30px] bg-neutral-950 p-6 text-white">
+                <div className="absolute -right-12 -top-14 h-40 w-40 rounded-full bg-white/10 blur-3xl" />
+
+                <div className="relative">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10">
+                        <ReceiptText size={23} />
+                    </div>
+
+                    <p className="mt-7 text-sm font-medium text-white/55">
+                        {restaurantName}
+                    </p>
+
+                    <h3 className="mt-1 text-3xl font-black">
+                        Açıq hesab yoxdur
+                    </h3>
+
+                    <p className="mt-3 max-w-sm text-sm leading-6 text-white/65">
+                        Masa {tableName} üçün hələ sifariş yaradılmayıb.
+                        Menyudan məhsul seçib ilk sifarişinizi göndərə
+                        bilərsiniz.
+                    </p>
+                </div>
+            </div>
+
+            <div className="mt-5 flex items-start gap-3 rounded-3xl border border-neutral-200 bg-neutral-50 p-5">
+                <WalletCards
+                    size={21}
+                    className="mt-0.5 shrink-0 text-neutral-500"
+                />
+
+                <div>
+                    <p className="font-bold text-neutral-900">
+                        Hesab necə işləyir?
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-neutral-500">
+                        Verdiyiniz bütün sifarişlər eyni masa hesabında
+                        toplanacaq. Kassa masanı bağladıqdan sonra hesab
+                        avtomatik sıfırlanacaq.
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 export default function AccountSheet({
-  open,
-  restaurantName,
-  tableName,
-  hallName,
-  address,
-  onClose,
+    open,
+    restaurantName,
+    tableName,
+    hallName,
+    address,
+    sessionData,
+    loading,
+    error,
+    onRefresh,
+    onClose,
 }: Props) {
-  if (!open) return null;
+    if (!open) return null;
 
-  return (
-    <>
-      <button
-        type="button"
-        aria-label="Hesab pəncərəsini bağla"
-        onClick={onClose}
-        className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
-      />
+    const activeSession =
+        sessionData?.hasActiveSession && sessionData.session
+            ? sessionData.session
+            : null;
 
-      <section className="fixed inset-x-0 bottom-0 z-[61] mx-auto max-h-[88vh] w-full max-w-lg overflow-hidden rounded-t-[34px] bg-white shadow-2xl">
-        <div className="flex justify-center pt-3">
-          <div className="h-1.5 w-12 rounded-full bg-neutral-200" />
-        </div>
+    const sessionStatus = activeSession
+        ? getSessionStatus(activeSession.status)
+        : null;
 
-        <div className="flex items-center justify-between border-b border-neutral-100 px-6 pb-5 pt-4">
-          <div>
-            <p className="text-sm font-semibold text-neutral-400">
-              Masa məlumatları
-            </p>
+    const allItems =
+        sessionData?.orders.flatMap((order) => order.items) ?? [];
 
-            <h2 className="mt-1 text-2xl font-black text-neutral-950">
-              Hesab
-            </h2>
-          </div>
+    const activeItems = allItems.filter(
+        (item) => item.status !== "CANCELLED",
+    );
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-700 transition hover:bg-neutral-200 active:scale-95"
-            aria-label="Bağla"
-          >
-            <X size={20} />
-          </button>
-        </div>
+    const cancelledItems = allItems.filter(
+        (item) => item.status === "CANCELLED",
+    );
 
-        <div className="max-h-[calc(88vh-96px)] overflow-y-auto px-6 pb-[max(28px,env(safe-area-inset-bottom))] pt-6">
-          <div className="relative overflow-hidden rounded-[30px] bg-neutral-950 p-6 text-white">
-            <div className="absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/10 blur-2xl" />
-            <div className="absolute -bottom-16 -left-8 h-40 w-40 rounded-full bg-white/5 blur-3xl" />
-
-            <div className="relative">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
-                <Store size={23} />
-              </div>
-
-              <p className="mt-7 text-sm font-medium text-white/55">
-                Xoş gəlmisiniz
-              </p>
-
-              <h3 className="mt-1 text-2xl font-black leading-tight">
-                {restaurantName}
-              </h3>
-
-              <div className="mt-6 flex items-center gap-2 text-sm text-white/70">
-                <Clock3 size={16} />
-
-                <span>
-                  Sifarişiniz bu masa üçün hazırlanacaq
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-5 space-y-3">
-            <InfoRow
-              icon={<Armchair size={20} />}
-              label="Masa"
-              value={tableName}
+    return (
+        <>
+            <button
+                type="button"
+                aria-label="Hesab pəncərəsini bağla"
+                onClick={onClose}
+                className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-sm"
             />
 
-            {hallName && (
-              <InfoRow
-                icon={<Store size={20} />}
-                label="Zal"
-                value={hallName}
-              />
-            )}
+            <section className="fixed inset-x-0 bottom-0 z-[61] mx-auto max-h-[92vh] w-full max-w-lg overflow-hidden rounded-t-[34px] bg-white shadow-2xl">
+                <div className="flex justify-center pt-3">
+                    <div className="h-1.5 w-12 rounded-full bg-neutral-200" />
+                </div>
 
-            {address && (
-              <InfoRow
-                icon={<MapPin size={20} />}
-                label="Ünvan"
-                value={address}
-              />
-            )}
-          </div>
+                <header className="flex items-center justify-between border-b border-neutral-100 px-6 pb-5 pt-4">
+                    <div>
+                        <p className="text-sm font-semibold text-neutral-400">
+                            Masa {tableName}
+                            {hallName ? ` · ${hallName}` : ""}
+                        </p>
 
-          <div className="mt-5 flex items-start gap-3 rounded-2xl border border-neutral-200 p-4">
-            <Info
-              size={19}
-              className="mt-0.5 shrink-0 text-neutral-400"
-            />
+                        <h2 className="mt-1 text-2xl font-black text-neutral-950">
+                            Mənim hesabım
+                        </h2>
+                    </div>
 
-            <p className="text-sm leading-6 text-neutral-500">
-              Sifariş göndərildikdən sonra restoran əməkdaşları onu qəbul
-              edib hazırlamağa başlayacaqlar.
-            </p>
-          </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void onRefresh()}
+                            disabled={loading}
+                            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-700 transition hover:bg-neutral-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label="Hesabı yenilə"
+                        >
+                            {loading ? (
+                                <Loader2
+                                    size={19}
+                                    className="animate-spin"
+                                />
+                            ) : (
+                                <RefreshCw size={19} />
+                            )}
+                        </button>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="mt-6 w-full rounded-2xl bg-neutral-950 py-4 font-bold text-white transition hover:bg-neutral-800 active:scale-[0.99]"
-          >
-            Menyuya qayıt
-          </button>
-        </div>
-      </section>
-    </>
-  );
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-700 transition hover:bg-neutral-200 active:scale-95"
+                            aria-label="Bağla"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
+                </header>
+
+                <div className="max-h-[calc(92vh-94px)] overflow-y-auto px-5 pb-[max(30px,env(safe-area-inset-bottom))] pt-5">
+                    {loading && !sessionData ? (
+                        <LoadingContent />
+                    ) : error && !sessionData ? (
+                        <div className="py-8">
+                            <div className="rounded-[28px] border border-red-200 bg-red-50 p-6 text-center">
+                                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100 text-red-600">
+                                    <AlertCircle size={24} />
+                                </div>
+
+                                <h3 className="mt-4 text-lg font-black text-red-950">
+                                    Hesab yüklənmədi
+                                </h3>
+
+                                <p className="mt-2 text-sm leading-6 text-red-700">
+                                    {error}
+                                </p>
+
+                                <button
+                                    type="button"
+                                    onClick={() => void onRefresh()}
+                                    className="mt-5 rounded-2xl bg-red-600 px-5 py-3 text-sm font-bold text-white transition active:scale-[0.98]"
+                                >
+                                    Yenidən yoxla
+                                </button>
+                            </div>
+                        </div>
+                    ) : !sessionData?.hasActiveSession ? (
+                        <EmptyAccount
+                            restaurantName={restaurantName}
+                            tableName={tableName}
+                        />
+                    ) : (
+                        <>
+                            <div className="relative overflow-hidden rounded-[30px] bg-neutral-950 p-6 text-white">
+                                <div className="absolute -right-14 -top-16 h-48 w-48 rounded-full bg-white/10 blur-3xl" />
+
+                                <div className="absolute -bottom-16 -left-10 h-44 w-44 rounded-full bg-white/5 blur-3xl" />
+
+                                <div className="relative">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
+                                            <WalletCards size={23} />
+                                        </div>
+
+                                        {sessionStatus && (
+                                            <span
+                                                className={`rounded-full px-3 py-1.5 text-xs font-black ${sessionStatus.className}`}
+                                            >
+                                                {sessionStatus.label}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <p className="mt-7 text-sm font-medium text-white/55">
+                                        Ümumi ödəniləcək məbləğ
+                                    </p>
+
+                                    <p className="mt-1 text-4xl font-black tracking-tight">
+                                        {formatMoney(
+                                            sessionData.summary.total,
+                                        )}
+                                    </p>
+
+                                    <div className="mt-7 grid grid-cols-2 gap-3">
+                                        <div className="rounded-2xl bg-white/10 p-4">
+                                            <p className="text-xs font-medium text-white/50">
+                                                Məhsullar
+                                            </p>
+
+                                            <p className="mt-1 text-lg font-black">
+                                                {formatMoney(
+                                                    sessionData.summary.subtotal,
+                                                )}
+                                            </p>
+                                        </div>
+
+                                        <div className="rounded-2xl bg-white/10 p-4">
+                                            <p className="text-xs font-medium text-white/50">
+                                                Servis haqqı{" "}
+                                                {sessionData.summary
+                                                    .serviceFeePercent > 0
+                                                    ? `(${sessionData.summary.serviceFeePercent}%)`
+                                                    : ""}
+                                            </p>
+
+                                            <p className="mt-1 text-lg font-black">
+                                                {formatMoney(
+                                                    sessionData.summary
+                                                        .serviceFeeAmount,
+                                                )}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {activeSession?.createdAt && (
+                                        <div className="mt-5 flex items-center gap-2 text-xs font-medium text-white/55">
+                                            <Clock3 size={15} />
+
+                                            <span>
+                                                Hesab açılıb:{" "}
+                                                {formatDate(
+                                                    activeSession.createdAt,
+                                                )}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="mt-6 flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-neutral-400">
+                                        Sifariş tarixçəsi
+                                    </p>
+
+                                    <h3 className="mt-1 text-xl font-black text-neutral-950">
+                                        Seçilən məhsullar
+                                    </h3>
+                                </div>
+
+                                <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-sm font-black text-neutral-700">
+                                    {activeItems.reduce(
+                                        (sum, item) =>
+                                            sum + Number(item.quantity),
+                                        0,
+                                    )}{" "}
+                                    ədəd
+                                </div>
+                            </div>
+
+                            {sessionData.orders.length === 0 ? (
+                                <div className="mt-4 rounded-3xl border border-dashed border-neutral-300 p-7 text-center">
+                                    <ReceiptText
+                                        size={28}
+                                        className="mx-auto text-neutral-300"
+                                    />
+
+                                    <p className="mt-3 font-bold text-neutral-700">
+                                        Sifariş tapılmadı
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="mt-4 space-y-5">
+                                    {sessionData.orders.map(
+                                        (order, orderIndex) => {
+                                            const visibleOrderItems =
+                                                order.items.filter(
+                                                    (item) =>
+                                                        item.status !==
+                                                        "CANCELLED",
+                                                );
+
+                                            if (
+                                                visibleOrderItems.length === 0
+                                            ) {
+                                                return null;
+                                            }
+
+                                            return (
+                                                <article
+                                                    key={order.id}
+                                                    className="overflow-hidden rounded-[28px] border border-neutral-200 bg-white"
+                                                >
+                                                    <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-4">
+                                                        <div>
+                                                            <p className="text-sm font-black text-neutral-900">
+                                                                Sifariş #
+                                                                {orderIndex + 1}
+                                                            </p>
+
+                                                            <p className="mt-1 text-xs font-medium text-neutral-400">
+                                                                {formatDate(
+                                                                    order.submittedAt ??
+                                                                    order.createdAt,
+                                                                )}
+                                                            </p>
+                                                        </div>
+
+                                                        <ReceiptText
+                                                            size={19}
+                                                            className="text-neutral-400"
+                                                        />
+                                                    </div>
+
+                                                    <div className="divide-y divide-neutral-100 px-5">
+                                                        {visibleOrderItems.map(
+                                                            (item) => {
+                                                                const status =
+                                                                    getItemStatus(
+                                                                        item.status,
+                                                                    );
+
+                                                                return (
+                                                                    <div
+                                                                        key={item.id}
+                                                                        className="py-5"
+                                                                    >
+                                                                        <div className="flex items-start justify-between gap-4">
+                                                                            <div className="min-w-0 flex-1">
+                                                                                <div className="flex items-start gap-3">
+                                                                                    <div className="flex h-9 min-w-9 items-center justify-center rounded-xl bg-neutral-950 px-2 text-sm font-black text-white">
+                                                                                        {item.quantity}×
+                                                                                    </div>
+
+                                                                                    <div className="min-w-0">
+                                                                                        <p className="font-black leading-5 text-neutral-950">
+                                                                                            {item.name}
+                                                                                        </p>
+
+                                                                                        <p className="mt-1 text-sm font-medium text-neutral-400">
+                                                                                            {formatMoney(
+                                                                                                item.unitPrice,
+                                                                                            )}{" "}
+                                                                                            / ədəd
+                                                                                        </p>
+                                                                                    </div>
+                                                                                </div>
+
+                                                                                {item.note && (
+                                                                                    <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+                                                                                        Qeyd:{" "}
+                                                                                        {item.note}
+                                                                                    </p>
+                                                                                )}
+                                                                            </div>
+
+                                                                            <p className="shrink-0 font-black text-neutral-950">
+                                                                                {formatMoney(
+                                                                                    item.lineTotal,
+                                                                                )}
+                                                                            </p>
+                                                                        </div>
+
+                                                                        <div className="mt-4 flex items-center justify-between gap-3">
+                                                                            <span
+                                                                                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold ${status.className}`}
+                                                                            >
+                                                                                {status.icon}
+                                                                                {status.label}
+                                                                            </span>
+
+                                                                            {item.canCancel &&
+                                                                                activeSession?.status === "OPEN" && (
+                                                                                    <span className="text-xs font-semibold text-neutral-400">
+                                                                                        Ləğv edilə bilər
+                                                                                    </span>
+                                                                                )}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            },
+                                                        )}
+                                                    </div>
+                                                </article>
+                                            );
+                                        },
+                                    )}
+                                </div>
+                            )}
+
+                            {cancelledItems.length > 0 && (
+                                <details className="mt-5 overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50">
+                                    <summary className="cursor-pointer px-5 py-4 text-sm font-bold text-neutral-600">
+                                        Ləğv edilmiş məhsullar (
+                                        {cancelledItems.length})
+                                    </summary>
+
+                                    <div className="border-t border-neutral-200 px-5">
+                                        {cancelledItems.map((item) => (
+                                            <div
+                                                key={item.id}
+                                                className="flex items-center justify-between border-b border-neutral-200 py-4 last:border-0"
+                                            >
+                                                <div>
+                                                    <p className="font-bold text-neutral-500 line-through">
+                                                        {item.quantity}× {item.name}
+                                                    </p>
+
+                                                    <p className="mt-1 text-xs text-red-500">
+                                                        Ləğv edilib
+                                                    </p>
+                                                </div>
+
+                                                <p className="text-sm font-bold text-neutral-400 line-through">
+                                                    {formatMoney(
+                                                        item.lineTotal,
+                                                    )}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </details>
+                            )}
+
+                            {error && (
+                                <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                                    <AlertCircle
+                                        size={19}
+                                        className="mt-0.5 shrink-0 text-amber-600"
+                                    />
+
+                                    <p className="text-sm leading-6 text-amber-700">
+                                        Son yeniləmə zamanı xəta baş verdi:
+                                        {" "}
+                                        {error}
+                                    </p>
+                                </div>
+                            )}
+
+                            {address && (
+                                <div className="mt-5 flex items-start gap-3 rounded-2xl bg-neutral-50 p-4">
+                                    <Store
+                                        size={19}
+                                        className="mt-0.5 shrink-0 text-neutral-400"
+                                    />
+
+                                    <div>
+                                        <p className="text-xs font-bold uppercase tracking-[0.12em] text-neutral-400">
+                                            Restoran
+                                        </p>
+
+                                        <p className="mt-1 text-sm font-bold text-neutral-800">
+                                            {restaurantName}
+                                        </p>
+
+                                        <p className="mt-1 text-sm leading-5 text-neutral-500">
+                                            {address}
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="mt-6 w-full rounded-2xl bg-neutral-950 py-4 font-bold text-white transition hover:bg-neutral-800 active:scale-[0.99]"
+                            >
+                                Menyuya qayıt
+                            </button>
+                        </>
+                    )}
+                </div>
+            </section>
+        </>
+    );
 }

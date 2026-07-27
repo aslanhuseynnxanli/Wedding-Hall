@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import CategoryTabs from "@/components/CategoryTabs";
 import ProductCard, {
@@ -42,6 +48,61 @@ interface Props {
   categories: Category[];
 }
 
+export interface CustomerSessionItem {
+  id: string;
+  menuItemId: string | null;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  note: string | null;
+  preparationArea: string;
+  status: string;
+  canCancel: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  readyAt: string | null;
+  servedAt: string | null;
+  cancelledAt: string | null;
+}
+
+export interface CustomerSessionOrder {
+  id: string;
+  status: string;
+  customerNote: string | null;
+  submittedAt: string | null;
+  createdAt: string;
+  items: CustomerSessionItem[];
+}
+
+export interface CustomerSessionResponse {
+  hasActiveSession: boolean;
+
+  table: {
+    id: string;
+    number: string;
+  };
+
+  session: {
+    id: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    billRequestedAt: string | null;
+    billReadyAt: string | null;
+    billDeliveredAt: string | null;
+  } | null;
+
+  orders: CustomerSessionOrder[];
+
+  summary: {
+    subtotal: number;
+    serviceFeePercent: number;
+    serviceFeeAmount: number;
+    total: number;
+  };
+}
+
 export default function CustomerMenu({
   token,
   table,
@@ -57,78 +118,73 @@ export default function CustomerMenu({
 
   const [sending, setSending] = useState(false);
 
+  const [sessionData, setSessionData] =
+    useState<CustomerSessionResponse | null>(null);
+
+  const [loadingSession, setLoadingSession] =
+    useState(true);
+
+  const [sessionError, setSessionError] =
+    useState<string | null>(null);
+
   const [activeCategory, setActiveCategory] = useState(
-    categories[0]?.id ?? ""
+    categories[0]?.id ?? "",
   );
 
-  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const sectionRefs = useRef<
+    Record<string, HTMLElement | null>
+  >({});
 
-  function add(id: string) {
-    setCart((prev) => ({
-      ...prev,
-      [id]: (prev[id] ?? 0) + 1,
-    }));
-  }
+  const loadSession = useCallback(async () => {
+    try {
+      setLoadingSession(true);
+      setSessionError(null);
 
-  function remove(id: string) {
-    setCart((prev) => {
-      const qty = (prev[id] ?? 0) - 1;
+      const response = await fetch(
+        `/api/table/${encodeURIComponent(token)}/session`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      );
 
-      if (qty <= 0) {
-        const clone = { ...prev };
-        delete clone[id];
-        return clone;
+      const result = await response
+        .json()
+        .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error ??
+            "Masanın açıq hesabı oxunmadı.",
+        );
       }
 
-      return {
-        ...prev,
-        [id]: qty,
-      };
-    });
-  }
+      setSessionData(
+        result as CustomerSessionResponse,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Masanın açıq hesabı oxunarkən xəta baş verdi.";
 
-  function clearCart() {
-    setCart({});
-  }
+      console.error(
+        "Customer session load error:",
+        error,
+      );
 
-  const allProducts = useMemo(
-    () => categories.flatMap((x) => x.items),
-    [categories]
-  );
+      setSessionError(message);
+    } finally {
+      setLoadingSession(false);
+    }
+  }, [token]);
 
-  const cartLines: CartLine[] = useMemo(() => {
-    return Object.entries(cart)
-      .map(([id, qty]) => {
-        const product = allProducts.find((p) => p.id === id);
-
-        if (!product) return null;
-
-        return {
-          id: product.id,
-          name: product.name,
-          price: product.price,
-          quantity: qty,
-        };
-      })
-      .filter(Boolean) as CartLine[];
-  }, [cart, allProducts]);
-  const cartCount = useMemo(
-    () => cartLines.reduce((sum, item) => sum + item.quantity, 0),
-    [cartLines]
-  );
-
-  const subtotal = useMemo(
-    () =>
-      cartLines.reduce(
-        (sum, item) => sum + item.price * item.quantity,
-        0
-      ),
-    [cartLines]
-  );
-
-  const serviceFee = 0;
-
-  const total = subtotal + serviceFee;
+  useEffect(() => {
+    void loadSession();
+  }, [loadSession]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -139,7 +195,8 @@ export default function CustomerMenu({
           .filter((entry) => entry.isIntersecting)
           .sort(
             (a, b) =>
-              b.intersectionRatio - a.intersectionRatio
+              b.intersectionRatio -
+              a.intersectionRatio,
           );
 
         const firstVisible = visibleEntries[0];
@@ -151,22 +208,113 @@ export default function CustomerMenu({
       {
         rootMargin: "-110px 0px -55% 0px",
         threshold: [0.15, 0.3, 0.5, 0.75],
-      }
+      },
     );
 
-    const sections = Object.values(sectionRefs.current).filter(
-      Boolean
-    ) as HTMLElement[];
+    const sections = Object.values(
+      sectionRefs.current,
+    ).filter(Boolean) as HTMLElement[];
 
-    sections.forEach((section) => observer.observe(section));
+    sections.forEach((section) => {
+      observer.observe(section);
+    });
 
     return () => {
       observer.disconnect();
     };
   }, [categories]);
 
+  function add(id: string) {
+    setCart((previous) => ({
+      ...previous,
+      [id]: (previous[id] ?? 0) + 1,
+    }));
+  }
+
+  function remove(id: string) {
+    setCart((previous) => {
+      const quantity = (previous[id] ?? 0) - 1;
+
+      if (quantity <= 0) {
+        const nextCart = { ...previous };
+
+        delete nextCart[id];
+
+        return nextCart;
+      }
+
+      return {
+        ...previous,
+        [id]: quantity,
+      };
+    });
+  }
+
+  function clearCart() {
+    setCart({});
+  }
+
+  const allProducts = useMemo(
+    () =>
+      categories.flatMap(
+        (category) => category.items,
+      ),
+    [categories],
+  );
+
+  const cartLines = useMemo<CartLine[]>(() => {
+    return Object.entries(cart)
+      .map(([id, quantity]) => {
+        const product = allProducts.find(
+          (item) => item.id === id,
+        );
+
+        if (!product) return null;
+
+        return {
+          id: product.id,
+          name: product.name,
+          price: product.price,
+          quantity,
+        };
+      })
+      .filter(
+        (item): item is CartLine => item !== null,
+      );
+  }, [cart, allProducts]);
+
+  const cartCount = useMemo(
+    () =>
+      cartLines.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      ),
+    [cartLines],
+  );
+
+  const subtotal = useMemo(
+    () =>
+      cartLines.reduce(
+        (sum, item) =>
+          sum + item.price * item.quantity,
+        0,
+      ),
+    [cartLines],
+  );
+
+  const serviceFeePercent =
+    sessionData?.summary.serviceFeePercent ?? 0;
+
+  const serviceFee =
+    serviceFeePercent > 0
+      ? subtotal * (serviceFeePercent / 100)
+      : 0;
+
+  const total = subtotal + serviceFee;
+
   function scrollToCategory(categoryId: string) {
-    const section = sectionRefs.current[categoryId];
+    const section =
+      sectionRefs.current[categoryId];
 
     if (!section) return;
 
@@ -201,6 +349,8 @@ export default function CustomerMenu({
   function openAccount() {
     setCartOpen(false);
     setAccountOpen(true);
+
+    void loadSession();
   }
 
   async function submitOrder() {
@@ -210,11 +360,12 @@ export default function CustomerMenu({
       setSending(true);
 
       const response = await fetch(
-        `/api/table/${token}/order`,
+        `/api/table/${encodeURIComponent(token)}/order`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Accept: "application/json",
           },
           body: JSON.stringify({
             items: cartLines.map((item) => ({
@@ -224,21 +375,27 @@ export default function CustomerMenu({
             })),
             customerNote: null,
           }),
-        }
+        },
       );
 
-      const result = await response.json().catch(() => null);
+      const result = await response
+        .json()
+        .catch(() => null);
 
       if (!response.ok) {
         throw new Error(
           result?.error ??
-          result?.message ??
-          "Sifariş göndərilmədi."
+            result?.message ??
+            "Sifariş göndərilmədi.",
         );
       }
 
       clearCart();
+
+      await loadSession();
+
       setCartOpen(false);
+      setAccountOpen(true);
 
       alert("Sifariş uğurla göndərildi.");
     } catch (error) {
@@ -252,20 +409,16 @@ export default function CustomerMenu({
       setSending(false);
     }
   }
+
   return (
     <>
       <main className="mx-auto min-h-screen max-w-lg bg-neutral-50 pb-36">
-
-        {/* Hero */}
-
         <section className="relative overflow-hidden rounded-b-[36px] bg-neutral-950 px-6 pb-10 pt-10 text-white">
-
           <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/10 blur-3xl" />
 
           <div className="absolute -left-16 bottom-0 h-52 w-52 rounded-full bg-white/5 blur-3xl" />
 
           <div className="relative">
-
             <p className="text-sm font-semibold uppercase tracking-[0.20em] text-white/60">
               QR Menu
             </p>
@@ -281,7 +434,6 @@ export default function CustomerMenu({
             )}
 
             <div className="mt-8 flex flex-wrap gap-3">
-
               <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur">
                 <p className="text-xs text-white/60">
                   Masa
@@ -304,29 +456,42 @@ export default function CustomerMenu({
                 </div>
               )}
 
+              {sessionData?.hasActiveSession && (
+                <button
+                  type="button"
+                  onClick={openAccount}
+                  className="rounded-2xl bg-white px-4 py-3 text-left text-neutral-950 transition active:scale-[0.98]"
+                >
+                  <p className="text-xs font-semibold text-neutral-400">
+                    Cari hesab
+                  </p>
+
+                  <p className="mt-1 font-black">
+                    {sessionData.summary.total.toFixed(2)} ₼
+                  </p>
+                </button>
+              )}
             </div>
-
           </div>
-
         </section>
 
         <CategoryTabs
-          categories={categories.map((c) => ({
-            id: c.id,
-            name: c.name,
+          categories={categories.map((category) => ({
+            id: category.id,
+            name: category.name,
           }))}
           activeCategory={activeCategory}
           onSelect={scrollToCategory}
         />
 
         <div className="space-y-10 px-4 py-6">
-
           {categories.map((category) => (
             <section
               key={category.id}
               id={category.id}
               ref={(node) => {
-                sectionRefs.current[category.id] = node;
+                sectionRefs.current[category.id] =
+                  node;
               }}
             >
               <h2 className="mb-5 text-2xl font-black text-neutral-900">
@@ -334,24 +499,20 @@ export default function CustomerMenu({
               </h2>
 
               <div className="space-y-4">
-
                 {category.items.map((item) => (
-
                   <ProductCard
                     key={item.id}
                     product={item}
                     quantity={cart[item.id] ?? 0}
                     onAdd={() => add(item.id)}
-                    onRemove={() => remove(item.id)}
+                    onRemove={() =>
+                      remove(item.id)
+                    }
                   />
-
                 ))}
-
               </div>
-
             </section>
           ))}
-
         </div>
       </main>
 
@@ -375,6 +536,10 @@ export default function CustomerMenu({
         tableName={table.name}
         hallName={hall?.name ?? null}
         address={restaurant.address ?? null}
+        sessionData={sessionData}
+        loading={loadingSession}
+        error={sessionError}
+        onRefresh={loadSession}
         onClose={() => setAccountOpen(false)}
       />
 
