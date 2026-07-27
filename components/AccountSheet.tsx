@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import {
     AlertCircle,
     Ban,
@@ -89,6 +91,7 @@ type StatusView = {
     className: string;
     icon: React.ReactNode;
 };
+type PaymentMethod = "CASH" | "CARD" | "OTHER";
 
 function formatMoney(value: number) {
     return `${Number(value || 0).toFixed(2)} ₼`;
@@ -243,9 +246,9 @@ function EmptyAccount({
                     </h3>
 
                     <p className="mt-3 max-w-sm text-sm leading-6 text-white/65">
-                        Masa {tableName} üçün hələ sifariş
-                        yaradılmayıb. Menyudan məhsul seçib ilk
-                        sifarişinizi göndərə bilərsiniz.
+                        Masa {tableName} üçün hələ sifariş yaradılmayıb.
+                        Menyudan məhsul seçib ilk sifarişinizi göndərə
+                        bilərsiniz.
                     </p>
                 </div>
             </div>
@@ -262,10 +265,9 @@ function EmptyAccount({
                     </p>
 
                     <p className="mt-1 text-sm leading-6 text-neutral-500">
-                        Verdiyiniz bütün sifarişlər eyni masa
-                        hesabında toplanacaq. Kassa masanı
-                        bağladıqdan sonra hesab avtomatik
-                        sıfırlanacaq.
+                        Verdiyiniz bütün sifarişlər eyni masa hesabında
+                        toplanacaq. Kassa masanı bağladıqdan sonra hesab
+                        avtomatik sıfırlanacaq.
                     </p>
                 </div>
             </div>
@@ -286,11 +288,22 @@ export default function AccountSheet({
     onRefresh,
     onClose,
 }: Props) {
+    const [cancellingItemId, setCancellingItemId] =
+        useState<string | null>(null);
+    const [paymentModalOpen, setPaymentModalOpen] =
+        useState(false);
+
+    const [selectedPaymentMethod, setSelectedPaymentMethod] =
+        useState<PaymentMethod | null>(null);
+
+    const [requestingBill, setRequestingBill] =
+        useState(false);
+
     if (!open) return null;
 
     const activeSession =
         sessionData?.hasActiveSession &&
-        sessionData.session
+            sessionData.session
             ? sessionData.session
             : null;
 
@@ -311,22 +324,33 @@ export default function AccountSheet({
         (item) => item.status === "CANCELLED",
     );
 
-    const requestBill = async () => {
-        if (
-            !window.confirm(
-                "Hesabı istəmək istəyirsiniz?",
-            )
-        ) {
+    const cancelItem = async (
+        itemId: string,
+        itemName: string,
+    ) => {
+        if (cancellingItemId) {
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `"${itemName}" məhsulunu ləğv etmək istəyirsiniz?`,
+        );
+
+        if (!confirmed) {
             return;
         }
 
         try {
+            setCancellingItemId(itemId);
+
             const response = await fetch(
                 `/api/table/${encodeURIComponent(
                     token,
-                )}/bill-request`,
+                )}/items/${encodeURIComponent(
+                    itemId,
+                )}/cancel`,
                 {
-                    method: "POST",
+                    method: "PATCH",
                     headers: {
                         "Content-Type":
                             "application/json",
@@ -338,19 +362,87 @@ export default function AccountSheet({
                 .json()
                 .catch(() => null)) as
                 | {
-                      error?: string;
-                      success?: boolean;
-                  }
+                    success?: boolean;
+                    error?: string;
+                    message?: string;
+                }
                 | null;
 
             if (!response.ok) {
                 window.alert(
                     result?.error ||
-                        "Hesab istənilə bilmədi.",
+                    "Məhsul ləğv edilə bilmədi.",
                 );
 
                 return;
             }
+
+            await onRefresh();
+
+            window.alert(
+                result?.message ||
+                "Məhsul uğurla ləğv edildi.",
+            );
+        } catch (cancelError) {
+            console.error(
+                "Cancel item error:",
+                cancelError,
+            );
+
+            window.alert(
+                "Məhsul ləğv edilərkən gözlənilməz xəta baş verdi.",
+            );
+        } finally {
+            setCancellingItemId(null);
+        }
+    };
+
+    const requestBill = async () => {
+        if (!selectedPaymentMethod || requestingBill) {
+            return;
+        }
+
+        try {
+            setRequestingBill(true);
+
+            const response = await fetch(
+                `/api/table/${encodeURIComponent(
+                    token,
+                )}/bill-request`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                    },
+                    body: JSON.stringify({
+                        paymentMethod:
+                            selectedPaymentMethod,
+                    }),
+                },
+            );
+
+            const result = (await response
+                .json()
+                .catch(() => null)) as
+                | {
+                    error?: string;
+                    success?: boolean;
+                    paymentMethod?: PaymentMethod;
+                }
+                | null;
+
+            if (!response.ok) {
+                window.alert(
+                    result?.error ||
+                    "Hesab istənilə bilmədi.",
+                );
+
+                return;
+            }
+
+            setPaymentModalOpen(false);
+            setSelectedPaymentMethod(null);
 
             await onRefresh();
 
@@ -366,6 +458,8 @@ export default function AccountSheet({
             window.alert(
                 "Hesab istənilərkən gözlənilməz xəta baş verdi.",
             );
+        } finally {
+            setRequestingBill(false);
         }
     };
 
@@ -477,9 +571,7 @@ export default function AccountSheet({
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
                                             <WalletCards
-                                                size={
-                                                    23
-                                                }
+                                                size={23}
                                             />
                                         </div>
 
@@ -528,7 +620,7 @@ export default function AccountSheet({
                                                 {sessionData
                                                     .summary
                                                     .serviceFeePercent >
-                                                0
+                                                    0
                                                     ? `(${sessionData.summary.serviceFeePercent}%)`
                                                     : ""}
                                             </p>
@@ -546,14 +638,11 @@ export default function AccountSheet({
                                     {activeSession?.createdAt && (
                                         <div className="mt-5 flex items-center gap-2 text-xs font-medium text-white/55">
                                             <Clock3
-                                                size={
-                                                    15
-                                                }
+                                                size={15}
                                             />
 
                                             <span>
-                                                Hesab
-                                                açılıb:{" "}
+                                                Hesab açılıb:{" "}
                                                 {formatDate(
                                                     activeSession.createdAt,
                                                 )}
@@ -591,7 +680,7 @@ export default function AccountSheet({
                             </div>
 
                             {sessionData.orders.length ===
-                            0 ? (
+                                0 ? (
                                 <div className="mt-4 rounded-3xl border border-dashed border-neutral-300 p-7 text-center">
                                     <ReceiptText
                                         size={28}
@@ -635,8 +724,7 @@ export default function AccountSheet({
                                                     <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-4">
                                                         <div>
                                                             <p className="text-sm font-black text-neutral-900">
-                                                                Sifariş
-                                                                #
+                                                                Sifariş #
                                                                 {orderIndex +
                                                                     1}
                                                             </p>
@@ -644,7 +732,7 @@ export default function AccountSheet({
                                                             <p className="mt-1 text-xs font-medium text-neutral-400">
                                                                 {formatDate(
                                                                     order.submittedAt ??
-                                                                        order.createdAt,
+                                                                    order.createdAt,
                                                                 )}
                                                             </p>
                                                         </div>
@@ -667,6 +755,10 @@ export default function AccountSheet({
                                                                         item.status,
                                                                     );
 
+                                                                const isCancelling =
+                                                                    cancellingItemId ===
+                                                                    item.id;
+
                                                                 return (
                                                                     <div
                                                                         key={
@@ -681,7 +773,6 @@ export default function AccountSheet({
                                                                                         {
                                                                                             item.quantity
                                                                                         }
-
                                                                                         ×
                                                                                     </div>
 
@@ -734,12 +825,46 @@ export default function AccountSheet({
 
                                                                             {item.canCancel &&
                                                                                 activeSession?.status ===
-                                                                                    "OPEN" && (
-                                                                                    <span className="text-xs font-semibold text-neutral-400">
-                                                                                        Ləğv
-                                                                                        edilə
-                                                                                        bilər
-                                                                                    </span>
+                                                                                "OPEN" && (
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() =>
+                                                                                            void cancelItem(
+                                                                                                item.id,
+                                                                                                item.name,
+                                                                                            )
+                                                                                        }
+                                                                                        disabled={
+                                                                                            cancellingItemId !==
+                                                                                            null
+                                                                                        }
+                                                                                        className="inline-flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+                                                                                    >
+                                                                                        {isCancelling ? (
+                                                                                            <>
+                                                                                                <Loader2
+                                                                                                    size={
+                                                                                                        14
+                                                                                                    }
+                                                                                                    className="animate-spin"
+                                                                                                />
+
+                                                                                                Ləğv
+                                                                                                edilir
+                                                                                            </>
+                                                                                        ) : (
+                                                                                            <>
+                                                                                                <Ban
+                                                                                                    size={
+                                                                                                        14
+                                                                                                    }
+                                                                                                />
+
+                                                                                                Ləğv
+                                                                                                et
+                                                                                            </>
+                                                                                        )}
+                                                                                    </button>
                                                                                 )}
                                                                         </div>
                                                                     </div>
@@ -756,54 +881,53 @@ export default function AccountSheet({
 
                             {cancelledItems.length >
                                 0 && (
-                                <details className="mt-5 overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50">
-                                    <summary className="cursor-pointer px-5 py-4 text-sm font-bold text-neutral-600">
-                                        Ləğv edilmiş
-                                        məhsullar (
-                                        {
-                                            cancelledItems.length
-                                        }
-                                        )
-                                    </summary>
+                                    <details className="mt-5 overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50">
+                                        <summary className="cursor-pointer px-5 py-4 text-sm font-bold text-neutral-600">
+                                            Ləğv edilmiş
+                                            məhsullar (
+                                            {
+                                                cancelledItems.length
+                                            }
+                                            )
+                                        </summary>
 
-                                    <div className="border-t border-neutral-200 px-5">
-                                        {cancelledItems.map(
-                                            (item) => (
-                                                <div
-                                                    key={
-                                                        item.id
-                                                    }
-                                                    className="flex items-center justify-between border-b border-neutral-200 py-4 last:border-0"
-                                                >
-                                                    <div>
-                                                        <p className="font-bold text-neutral-500 line-through">
-                                                            {
-                                                                item.quantity
-                                                            }
+                                        <div className="border-t border-neutral-200 px-5">
+                                            {cancelledItems.map(
+                                                (item) => (
+                                                    <div
+                                                        key={
+                                                            item.id
+                                                        }
+                                                        className="flex items-center justify-between border-b border-neutral-200 py-4 last:border-0"
+                                                    >
+                                                        <div>
+                                                            <p className="font-bold text-neutral-500 line-through">
+                                                                {
+                                                                    item.quantity
+                                                                }
+                                                                ×{" "}
+                                                                {
+                                                                    item.name
+                                                                }
+                                                            </p>
 
-                                                            ×{" "}
-                                                            {
-                                                                item.name
-                                                            }
-                                                        </p>
+                                                            <p className="mt-1 text-xs text-red-500">
+                                                                Ləğv
+                                                                edilib
+                                                            </p>
+                                                        </div>
 
-                                                        <p className="mt-1 text-xs text-red-500">
-                                                            Ləğv
-                                                            edilib
+                                                        <p className="text-sm font-bold text-neutral-400 line-through">
+                                                            {formatMoney(
+                                                                item.lineTotal,
+                                                            )}
                                                         </p>
                                                     </div>
-
-                                                    <p className="text-sm font-bold text-neutral-400 line-through">
-                                                        {formatMoney(
-                                                            item.lineTotal,
-                                                        )}
-                                                    </p>
-                                                </div>
-                                            ),
-                                        )}
-                                    </div>
-                                </details>
-                            )}
+                                                ),
+                                            )}
+                                        </div>
+                                    </details>
+                                )}
 
                             {error && (
                                 <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
@@ -847,32 +971,29 @@ export default function AccountSheet({
 
                             <button
                                 type="button"
-                                onClick={() =>
-                                    void requestBill()
-                                }
+                                onClick={() => {
+                                    setSelectedPaymentMethod(null);
+                                    setPaymentModalOpen(true);
+                                }}
                                 disabled={
                                     loading ||
-                                    sessionData.session
-                                        ?.status !==
-                                        "OPEN"
+                                    cancellingItemId !== null ||
+                                    requestingBill ||
+                                    sessionData.session?.status !==
+                                    "OPEN"
                                 }
                                 className="mt-6 w-full rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
                             >
-                                {sessionData.session
-                                    ?.status ===
-                                "BILL_REQUESTED"
+                                {sessionData.session?.status ===
+                                    "BILL_REQUESTED"
                                     ? "Hesab istənilib"
-                                    : sessionData
-                                            .session
-                                            ?.status ===
-                                      "BILL_READY"
-                                    ? "Hesab hazırdır"
-                                    : sessionData
-                                            .session
-                                            ?.status ===
-                                      "BILL_DELIVERED"
-                                    ? "Hesab təqdim edilib"
-                                    : "Hesabı istə"}
+                                    : sessionData.session?.status ===
+                                        "BILL_READY"
+                                        ? "Hesab hazırdır"
+                                        : sessionData.session?.status ===
+                                            "BILL_DELIVERED"
+                                            ? "Hesab təqdim edilib"
+                                            : "Hesabı istə"}
                             </button>
 
                             <button
@@ -886,6 +1007,201 @@ export default function AccountSheet({
                     )}
                 </div>
             </section>
+            {paymentModalOpen && (
+                <>
+                    <button
+                        type="button"
+                        aria-label="Ödəniş pəncərəsini bağla"
+                        onClick={() => {
+                            if (requestingBill) {
+                                return;
+                            }
+
+                            setPaymentModalOpen(false);
+                            setSelectedPaymentMethod(null);
+                        }}
+                        className="fixed inset-0 z-[70] bg-black/55 backdrop-blur-sm"
+                    />
+
+                    <div className="fixed inset-x-0 bottom-0 z-[71] mx-auto w-full max-w-lg rounded-t-[34px] bg-white px-5 pb-[max(28px,env(safe-area-inset-bottom))] pt-3 shadow-2xl">
+                        <div className="flex justify-center">
+                            <div className="h-1.5 w-12 rounded-full bg-neutral-200" />
+                        </div>
+
+                        <div className="mt-5 flex items-start justify-between gap-4">
+                            <div>
+                                <p className="text-xs font-bold uppercase tracking-[0.16em] text-neutral-400">
+                                    Hesabın ödənişi
+                                </p>
+
+                                <h3 className="mt-1 text-2xl font-black text-neutral-950">
+                                    Ödəniş üsulunu seçin
+                                </h3>
+
+                                <p className="mt-2 text-sm leading-6 text-neutral-500">
+                                    Restoran əməkdaşları hesabı seçdiyiniz
+                                    ödəniş üsuluna uyğun hazırlayacaq.
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (requestingBill) {
+                                        return;
+                                    }
+
+                                    setPaymentModalOpen(false);
+                                    setSelectedPaymentMethod(null);
+                                }}
+                                disabled={requestingBill}
+                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-700 transition hover:bg-neutral-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label="Bağla"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="mt-6 grid grid-cols-3 gap-3">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setSelectedPaymentMethod(
+                                        "CASH",
+                                    )
+                                }
+                                disabled={requestingBill}
+                                className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
+                                        "CASH"
+                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    }`}
+                            >
+                                <div
+                                    className={`flex h-11 w-11 items-center justify-center rounded-2xl text-xl ${selectedPaymentMethod ===
+                                            "CASH"
+                                            ? "bg-emerald-600 text-white"
+                                            : "bg-neutral-100 text-neutral-700"
+                                        }`}
+                                >
+                                    ₼
+                                </div>
+
+                                <p className="mt-4 font-black text-neutral-950">
+                                    Nağd
+                                </p>
+
+                                <p className="mt-1 text-xs text-neutral-400">
+                                    Kassada nağd
+                                </p>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setSelectedPaymentMethod(
+                                        "CARD",
+                                    )
+                                }
+                                disabled={requestingBill}
+                                className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
+                                        "CARD"
+                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    }`}
+                            >
+                                <div
+                                    className={`flex h-11 w-11 items-center justify-center rounded-2xl ${selectedPaymentMethod ===
+                                            "CARD"
+                                            ? "bg-emerald-600 text-white"
+                                            : "bg-neutral-100 text-neutral-700"
+                                        }`}
+                                >
+                                    <WalletCards size={21} />
+                                </div>
+
+                                <p className="mt-4 font-black text-neutral-950">
+                                    Kart
+                                </p>
+
+                                <p className="mt-1 text-xs text-neutral-400">
+                                    POS terminal
+                                </p>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setSelectedPaymentMethod(
+                                        "OTHER",
+                                    )
+                                }
+                                disabled={requestingBill}
+                                className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
+                                        "OTHER"
+                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    }`}
+                            >
+                                <div
+                                    className={`flex h-11 w-11 items-center justify-center rounded-2xl ${selectedPaymentMethod ===
+                                            "OTHER"
+                                            ? "bg-emerald-600 text-white"
+                                            : "bg-neutral-100 text-neutral-700"
+                                        }`}
+                                >
+                                    <ReceiptText size={21} />
+                                </div>
+
+                                <p className="mt-4 font-black text-neutral-950">
+                                    Digər
+                                </p>
+
+                                <p className="mt-1 text-xs text-neutral-400">
+                                    Digər üsul
+                                </p>
+                            </button>
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() =>
+                                void requestBill()
+                            }
+                            disabled={
+                                !selectedPaymentMethod ||
+                                requestingBill
+                            }
+                            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
+                        >
+                            {requestingBill ? (
+                                <>
+                                    <Loader2
+                                        size={20}
+                                        className="animate-spin"
+                                    />
+
+                                    Göndərilir
+                                </>
+                            ) : (
+                                "Hesabı təsdiqlə"
+                            )}
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setPaymentModalOpen(false);
+                                setSelectedPaymentMethod(null);
+                            }}
+                            disabled={requestingBill}
+                            className="mt-3 w-full rounded-2xl bg-neutral-100 py-4 font-bold text-neutral-700 transition hover:bg-neutral-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Ləğv et
+                        </button>
+                    </div>
+                </>
+            )}
         </>
     );
 }
