@@ -72,6 +72,7 @@ interface CustomerSessionResponse {
 
 interface Props {
     open: boolean;
+    token: string;
     restaurantName: string;
     tableName: string;
     hallName?: string | null;
@@ -168,31 +169,36 @@ function getSessionStatus(status: string) {
         case "OPEN":
             return {
                 label: "Hesab açıqdır",
-                className: "bg-emerald-400 text-emerald-950",
+                className:
+                    "bg-emerald-400 text-emerald-950",
             };
 
         case "BILL_REQUESTED":
             return {
                 label: "Hesab istənilib",
-                className: "bg-amber-300 text-amber-950",
+                className:
+                    "bg-amber-300 text-amber-950",
             };
 
         case "BILL_READY":
             return {
                 label: "Hesab hazırdır",
-                className: "bg-blue-300 text-blue-950",
+                className:
+                    "bg-blue-300 text-blue-950",
             };
 
         case "BILL_DELIVERED":
             return {
                 label: "Hesab təqdim edilib",
-                className: "bg-violet-300 text-violet-950",
+                className:
+                    "bg-violet-300 text-violet-950",
             };
 
         default:
             return {
                 label: status,
-                className: "bg-white/15 text-white",
+                className:
+                    "bg-white/15 text-white",
             };
     }
 }
@@ -237,9 +243,9 @@ function EmptyAccount({
                     </h3>
 
                     <p className="mt-3 max-w-sm text-sm leading-6 text-white/65">
-                        Masa {tableName} üçün hələ sifariş yaradılmayıb.
-                        Menyudan məhsul seçib ilk sifarişinizi göndərə
-                        bilərsiniz.
+                        Masa {tableName} üçün hələ sifariş
+                        yaradılmayıb. Menyudan məhsul seçib ilk
+                        sifarişinizi göndərə bilərsiniz.
                     </p>
                 </div>
             </div>
@@ -256,9 +262,10 @@ function EmptyAccount({
                     </p>
 
                     <p className="mt-1 text-sm leading-6 text-neutral-500">
-                        Verdiyiniz bütün sifarişlər eyni masa hesabında
-                        toplanacaq. Kassa masanı bağladıqdan sonra hesab
-                        avtomatik sıfırlanacaq.
+                        Verdiyiniz bütün sifarişlər eyni masa
+                        hesabında toplanacaq. Kassa masanı
+                        bağladıqdan sonra hesab avtomatik
+                        sıfırlanacaq.
                     </p>
                 </div>
             </div>
@@ -268,6 +275,7 @@ function EmptyAccount({
 
 export default function AccountSheet({
     open,
+    token,
     restaurantName,
     tableName,
     hallName,
@@ -281,7 +289,8 @@ export default function AccountSheet({
     if (!open) return null;
 
     const activeSession =
-        sessionData?.hasActiveSession && sessionData.session
+        sessionData?.hasActiveSession &&
+        sessionData.session
             ? sessionData.session
             : null;
 
@@ -290,7 +299,9 @@ export default function AccountSheet({
         : null;
 
     const allItems =
-        sessionData?.orders.flatMap((order) => order.items) ?? [];
+        sessionData?.orders.flatMap(
+            (order) => order.items,
+        ) ?? [];
 
     const activeItems = allItems.filter(
         (item) => item.status !== "CANCELLED",
@@ -299,6 +310,64 @@ export default function AccountSheet({
     const cancelledItems = allItems.filter(
         (item) => item.status === "CANCELLED",
     );
+
+    const requestBill = async () => {
+        if (
+            !window.confirm(
+                "Hesabı istəmək istəyirsiniz?",
+            )
+        ) {
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `/api/table/${encodeURIComponent(
+                    token,
+                )}/bill-request`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                    },
+                },
+            );
+
+            const result = (await response
+                .json()
+                .catch(() => null)) as
+                | {
+                      error?: string;
+                      success?: boolean;
+                  }
+                | null;
+
+            if (!response.ok) {
+                window.alert(
+                    result?.error ||
+                        "Hesab istənilə bilmədi.",
+                );
+
+                return;
+            }
+
+            await onRefresh();
+
+            window.alert(
+                "Hesab restoran əməkdaşlarına göndərildi.",
+            );
+        } catch (requestError) {
+            console.error(
+                "Bill request error:",
+                requestError,
+            );
+
+            window.alert(
+                "Hesab istənilərkən gözlənilməz xəta baş verdi.",
+            );
+        }
+    };
 
     return (
         <>
@@ -318,7 +387,9 @@ export default function AccountSheet({
                     <div>
                         <p className="text-sm font-semibold text-neutral-400">
                             Masa {tableName}
-                            {hallName ? ` · ${hallName}` : ""}
+                            {hallName
+                                ? ` · ${hallName}`
+                                : ""}
                         </p>
 
                         <h2 className="mt-1 text-2xl font-black text-neutral-950">
@@ -329,7 +400,9 @@ export default function AccountSheet({
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
-                            onClick={() => void onRefresh()}
+                            onClick={() =>
+                                void onRefresh()
+                            }
                             disabled={loading}
                             className="flex h-10 w-10 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-700 transition hover:bg-neutral-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
                             aria-label="Hesabı yenilə"
@@ -362,7 +435,9 @@ export default function AccountSheet({
                         <div className="py-8">
                             <div className="rounded-[28px] border border-red-200 bg-red-50 p-6 text-center">
                                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100 text-red-600">
-                                    <AlertCircle size={24} />
+                                    <AlertCircle
+                                        size={24}
+                                    />
                                 </div>
 
                                 <h3 className="mt-4 text-lg font-black text-red-950">
@@ -375,7 +450,9 @@ export default function AccountSheet({
 
                                 <button
                                     type="button"
-                                    onClick={() => void onRefresh()}
+                                    onClick={() =>
+                                        void onRefresh()
+                                    }
                                     className="mt-5 rounded-2xl bg-red-600 px-5 py-3 text-sm font-bold text-white transition active:scale-[0.98]"
                                 >
                                     Yenidən yoxla
@@ -384,7 +461,9 @@ export default function AccountSheet({
                         </div>
                     ) : !sessionData?.hasActiveSession ? (
                         <EmptyAccount
-                            restaurantName={restaurantName}
+                            restaurantName={
+                                restaurantName
+                            }
                             tableName={tableName}
                         />
                     ) : (
@@ -397,25 +476,34 @@ export default function AccountSheet({
                                 <div className="relative">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
-                                            <WalletCards size={23} />
+                                            <WalletCards
+                                                size={
+                                                    23
+                                                }
+                                            />
                                         </div>
 
                                         {sessionStatus && (
                                             <span
                                                 className={`rounded-full px-3 py-1.5 text-xs font-black ${sessionStatus.className}`}
                                             >
-                                                {sessionStatus.label}
+                                                {
+                                                    sessionStatus.label
+                                                }
                                             </span>
                                         )}
                                     </div>
 
                                     <p className="mt-7 text-sm font-medium text-white/55">
-                                        Ümumi ödəniləcək məbləğ
+                                        Ümumi ödəniləcək
+                                        məbləğ
                                     </p>
 
                                     <p className="mt-1 text-4xl font-black tracking-tight">
                                         {formatMoney(
-                                            sessionData.summary.total,
+                                            sessionData
+                                                .summary
+                                                .total,
                                         )}
                                     </p>
 
@@ -427,7 +515,9 @@ export default function AccountSheet({
 
                                             <p className="mt-1 text-lg font-black">
                                                 {formatMoney(
-                                                    sessionData.summary.subtotal,
+                                                    sessionData
+                                                        .summary
+                                                        .subtotal,
                                                 )}
                                             </p>
                                         </div>
@@ -435,15 +525,18 @@ export default function AccountSheet({
                                         <div className="rounded-2xl bg-white/10 p-4">
                                             <p className="text-xs font-medium text-white/50">
                                                 Servis haqqı{" "}
-                                                {sessionData.summary
-                                                    .serviceFeePercent > 0
+                                                {sessionData
+                                                    .summary
+                                                    .serviceFeePercent >
+                                                0
                                                     ? `(${sessionData.summary.serviceFeePercent}%)`
                                                     : ""}
                                             </p>
 
                                             <p className="mt-1 text-lg font-black">
                                                 {formatMoney(
-                                                    sessionData.summary
+                                                    sessionData
+                                                        .summary
                                                         .serviceFeeAmount,
                                                 )}
                                             </p>
@@ -452,10 +545,15 @@ export default function AccountSheet({
 
                                     {activeSession?.createdAt && (
                                         <div className="mt-5 flex items-center gap-2 text-xs font-medium text-white/55">
-                                            <Clock3 size={15} />
+                                            <Clock3
+                                                size={
+                                                    15
+                                                }
+                                            />
 
                                             <span>
-                                                Hesab açılıb:{" "}
+                                                Hesab
+                                                açılıb:{" "}
                                                 {formatDate(
                                                     activeSession.createdAt,
                                                 )}
@@ -478,15 +576,22 @@ export default function AccountSheet({
 
                                 <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-sm font-black text-neutral-700">
                                     {activeItems.reduce(
-                                        (sum, item) =>
-                                            sum + Number(item.quantity),
+                                        (
+                                            sum,
+                                            item,
+                                        ) =>
+                                            sum +
+                                            Number(
+                                                item.quantity,
+                                            ),
                                         0,
                                     )}{" "}
                                     ədəd
                                 </div>
                             </div>
 
-                            {sessionData.orders.length === 0 ? (
+                            {sessionData.orders.length ===
+                            0 ? (
                                 <div className="mt-4 rounded-3xl border border-dashed border-neutral-300 p-7 text-center">
                                     <ReceiptText
                                         size={28}
@@ -500,49 +605,63 @@ export default function AccountSheet({
                             ) : (
                                 <div className="mt-4 space-y-5">
                                     {sessionData.orders.map(
-                                        (order, orderIndex) => {
+                                        (
+                                            order,
+                                            orderIndex,
+                                        ) => {
                                             const visibleOrderItems =
                                                 order.items.filter(
-                                                    (item) =>
+                                                    (
+                                                        item,
+                                                    ) =>
                                                         item.status !==
                                                         "CANCELLED",
                                                 );
 
                                             if (
-                                                visibleOrderItems.length === 0
+                                                visibleOrderItems.length ===
+                                                0
                                             ) {
                                                 return null;
                                             }
 
                                             return (
                                                 <article
-                                                    key={order.id}
+                                                    key={
+                                                        order.id
+                                                    }
                                                     className="overflow-hidden rounded-[28px] border border-neutral-200 bg-white"
                                                 >
                                                     <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-4">
                                                         <div>
                                                             <p className="text-sm font-black text-neutral-900">
-                                                                Sifariş #
-                                                                {orderIndex + 1}
+                                                                Sifariş
+                                                                #
+                                                                {orderIndex +
+                                                                    1}
                                                             </p>
 
                                                             <p className="mt-1 text-xs font-medium text-neutral-400">
                                                                 {formatDate(
                                                                     order.submittedAt ??
-                                                                    order.createdAt,
+                                                                        order.createdAt,
                                                                 )}
                                                             </p>
                                                         </div>
 
                                                         <ReceiptText
-                                                            size={19}
+                                                            size={
+                                                                19
+                                                            }
                                                             className="text-neutral-400"
                                                         />
                                                     </div>
 
                                                     <div className="divide-y divide-neutral-100 px-5">
                                                         {visibleOrderItems.map(
-                                                            (item) => {
+                                                            (
+                                                                item,
+                                                            ) => {
                                                                 const status =
                                                                     getItemStatus(
                                                                         item.status,
@@ -550,26 +669,35 @@ export default function AccountSheet({
 
                                                                 return (
                                                                     <div
-                                                                        key={item.id}
+                                                                        key={
+                                                                            item.id
+                                                                        }
                                                                         className="py-5"
                                                                     >
                                                                         <div className="flex items-start justify-between gap-4">
                                                                             <div className="min-w-0 flex-1">
                                                                                 <div className="flex items-start gap-3">
                                                                                     <div className="flex h-9 min-w-9 items-center justify-center rounded-xl bg-neutral-950 px-2 text-sm font-black text-white">
-                                                                                        {item.quantity}×
+                                                                                        {
+                                                                                            item.quantity
+                                                                                        }
+
+                                                                                        ×
                                                                                     </div>
 
                                                                                     <div className="min-w-0">
                                                                                         <p className="font-black leading-5 text-neutral-950">
-                                                                                            {item.name}
+                                                                                            {
+                                                                                                item.name
+                                                                                            }
                                                                                         </p>
 
                                                                                         <p className="mt-1 text-sm font-medium text-neutral-400">
                                                                                             {formatMoney(
                                                                                                 item.unitPrice,
                                                                                             )}{" "}
-                                                                                            / ədəd
+                                                                                            /
+                                                                                            ədəd
                                                                                         </p>
                                                                                     </div>
                                                                                 </div>
@@ -577,7 +705,9 @@ export default function AccountSheet({
                                                                                 {item.note && (
                                                                                     <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
                                                                                         Qeyd:{" "}
-                                                                                        {item.note}
+                                                                                        {
+                                                                                            item.note
+                                                                                        }
                                                                                     </p>
                                                                                 )}
                                                                             </div>
@@ -593,14 +723,22 @@ export default function AccountSheet({
                                                                             <span
                                                                                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold ${status.className}`}
                                                                             >
-                                                                                {status.icon}
-                                                                                {status.label}
+                                                                                {
+                                                                                    status.icon
+                                                                                }
+
+                                                                                {
+                                                                                    status.label
+                                                                                }
                                                                             </span>
 
                                                                             {item.canCancel &&
-                                                                                activeSession?.status === "OPEN" && (
+                                                                                activeSession?.status ===
+                                                                                    "OPEN" && (
                                                                                     <span className="text-xs font-semibold text-neutral-400">
-                                                                                        Ləğv edilə bilər
+                                                                                        Ləğv
+                                                                                        edilə
+                                                                                        bilər
                                                                                     </span>
                                                                                 )}
                                                                         </div>
@@ -616,36 +754,53 @@ export default function AccountSheet({
                                 </div>
                             )}
 
-                            {cancelledItems.length > 0 && (
+                            {cancelledItems.length >
+                                0 && (
                                 <details className="mt-5 overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50">
                                     <summary className="cursor-pointer px-5 py-4 text-sm font-bold text-neutral-600">
-                                        Ləğv edilmiş məhsullar (
-                                        {cancelledItems.length})
+                                        Ləğv edilmiş
+                                        məhsullar (
+                                        {
+                                            cancelledItems.length
+                                        }
+                                        )
                                     </summary>
 
                                     <div className="border-t border-neutral-200 px-5">
-                                        {cancelledItems.map((item) => (
-                                            <div
-                                                key={item.id}
-                                                className="flex items-center justify-between border-b border-neutral-200 py-4 last:border-0"
-                                            >
-                                                <div>
-                                                    <p className="font-bold text-neutral-500 line-through">
-                                                        {item.quantity}× {item.name}
-                                                    </p>
+                                        {cancelledItems.map(
+                                            (item) => (
+                                                <div
+                                                    key={
+                                                        item.id
+                                                    }
+                                                    className="flex items-center justify-between border-b border-neutral-200 py-4 last:border-0"
+                                                >
+                                                    <div>
+                                                        <p className="font-bold text-neutral-500 line-through">
+                                                            {
+                                                                item.quantity
+                                                            }
 
-                                                    <p className="mt-1 text-xs text-red-500">
-                                                        Ləğv edilib
+                                                            ×{" "}
+                                                            {
+                                                                item.name
+                                                            }
+                                                        </p>
+
+                                                        <p className="mt-1 text-xs text-red-500">
+                                                            Ləğv
+                                                            edilib
+                                                        </p>
+                                                    </div>
+
+                                                    <p className="text-sm font-bold text-neutral-400 line-through">
+                                                        {formatMoney(
+                                                            item.lineTotal,
+                                                        )}
                                                     </p>
                                                 </div>
-
-                                                <p className="text-sm font-bold text-neutral-400 line-through">
-                                                    {formatMoney(
-                                                        item.lineTotal,
-                                                    )}
-                                                </p>
-                                            </div>
-                                        ))}
+                                            ),
+                                        )}
                                     </div>
                                 </details>
                             )}
@@ -658,8 +813,8 @@ export default function AccountSheet({
                                     />
 
                                     <p className="text-sm leading-6 text-amber-700">
-                                        Son yeniləmə zamanı xəta baş verdi:
-                                        {" "}
+                                        Son yeniləmə zamanı
+                                        xəta baş verdi:{" "}
                                         {error}
                                     </p>
                                 </div>
@@ -678,7 +833,9 @@ export default function AccountSheet({
                                         </p>
 
                                         <p className="mt-1 text-sm font-bold text-neutral-800">
-                                            {restaurantName}
+                                            {
+                                                restaurantName
+                                            }
                                         </p>
 
                                         <p className="mt-1 text-sm leading-5 text-neutral-500">
@@ -690,8 +847,38 @@ export default function AccountSheet({
 
                             <button
                                 type="button"
+                                onClick={() =>
+                                    void requestBill()
+                                }
+                                disabled={
+                                    loading ||
+                                    sessionData.session
+                                        ?.status !==
+                                        "OPEN"
+                                }
+                                className="mt-6 w-full rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
+                            >
+                                {sessionData.session
+                                    ?.status ===
+                                "BILL_REQUESTED"
+                                    ? "Hesab istənilib"
+                                    : sessionData
+                                            .session
+                                            ?.status ===
+                                      "BILL_READY"
+                                    ? "Hesab hazırdır"
+                                    : sessionData
+                                            .session
+                                            ?.status ===
+                                      "BILL_DELIVERED"
+                                    ? "Hesab təqdim edilib"
+                                    : "Hesabı istə"}
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={onClose}
-                                className="mt-6 w-full rounded-2xl bg-neutral-950 py-4 font-bold text-white transition hover:bg-neutral-800 active:scale-[0.99]"
+                                className="mt-3 w-full rounded-2xl bg-neutral-950 py-4 font-bold text-white transition hover:bg-neutral-800 active:scale-[0.99]"
                             >
                                 Menyuya qayıt
                             </button>

@@ -532,6 +532,7 @@ export default function CustomerMenu({
 
       <AccountSheet
         open={accountOpen}
+        token={token}
         restaurantName={restaurant.name}
         tableName={table.name}
         hallName={hall?.name ?? null}
