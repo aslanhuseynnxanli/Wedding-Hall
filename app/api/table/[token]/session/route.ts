@@ -128,7 +128,7 @@ export async function GET(
     }
 
     /*
-     * 2. Masanın hazırda aktiv olan hesabını tapırıq.
+     * 2. Masanın aktiv hesabını tapırıq.
      */
     const {
       data: session,
@@ -179,14 +179,11 @@ export async function GET(
     }
 
     /*
-     * Aktiv hesab yoxdursa boş nəticə qaytarılır.
-     *
-     * Cookie silinmir. Beləliklə köhnə müştərinin
-     * brauzeri sonradan yeni hesab açılanda həmin
-     * yeni hesaba avtomatik qoşula bilməyəcək.
+     * Aktiv hesab yoxdursa boş nəticə qaytarırıq
+     * və köhnə customer_session cookie-sini silirik.
      */
     if (!session) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         {
           hasActiveSession: false,
 
@@ -215,11 +212,24 @@ export async function GET(
           },
         },
       );
+
+      response.cookies.set({
+        name: CUSTOMER_SESSION_COOKIE,
+        value: "",
+        httpOnly: true,
+        secure:
+          process.env.NODE_ENV ===
+          "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 0,
+      });
+
+      return response;
     }
 
     /*
-     * 3. Brauzerin customer_session cookie-sini
-     * yoxlayırıq.
+     * 3. Browser cookie-sini yoxlayırıq.
      */
     const existingSessionToken =
       request.cookies.get(
@@ -235,8 +245,7 @@ export async function GET(
       | null = null;
 
     /*
-     * Cookie varsa, yalnız həmin cookie hazırkı
-     * dining_session-a bağlı və aktivdirsə keçərlidir.
+     * Cookie varsa DB-də axtarırıq.
      */
     if (existingSessionToken) {
       const {
@@ -276,61 +285,74 @@ export async function GET(
       }
 
       /*
-       * Cookie mövcuddur, amma:
-       * - DB-də tapılmırsa;
-       * - deaktiv edilibsə;
-       * - başqa dining_session-a aiddirsə;
-       *
-       * yeni customer_session yaratmırıq.
-       * Bu, köhnə müştərinin yeni hesabı görməsinin
-       * qarşısını alır.
+       * Cookie hazırkı dining_session-a aiddirsə,
+       * mövcud customer_session istifadə olunur.
        */
       if (
-        !existingCustomerSession ||
-        !existingCustomerSession.is_active ||
+        existingCustomerSession &&
+        existingCustomerSession.is_active &&
         existingCustomerSession
-          .dining_session_id !== session.id
+          .dining_session_id === session.id
       ) {
-        return NextResponse.json(
-          {
-            error:
-              "Bu müştəri sessiyasının müddəti bitib. Yeni xidmət üçün QR kodu başqa brauzerdə açın.",
-            sessionExpired: true,
-          },
-          {
-            status: 403,
-            headers: {
-              "Cache-Control":
-                "no-store, no-cache, must-revalidate",
-            },
-          },
-        );
+        customerSession =
+          existingCustomerSession as CustomerSessionRow;
+
+        const {
+          error: lastSeenUpdateError,
+        } = await supabaseAdmin
+          .from("customer_sessions")
+          .update({
+            last_seen_at:
+              new Date().toISOString(),
+          })
+          .eq("id", customerSession.id);
+
+        if (lastSeenUpdateError) {
+          console.error(
+            "Customer session last_seen update error:",
+            lastSeenUpdateError,
+          );
+        }
+      } else {
+        /*
+         * Köhnə və ya başqa dining_session-a aid
+         * customer_session varsa deaktiv edirik.
+         *
+         * Əvvəlki kod burada 403 qaytarırdı.
+         * Problem məhz həmin hissədən yaranırdı.
+         */
+        if (
+          existingCustomerSession?.id &&
+          existingCustomerSession.is_active
+        ) {
+          const {
+            error: deactivateError,
+          } = await supabaseAdmin
+            .from("customer_sessions")
+            .update({
+              is_active: false,
+            })
+            .eq(
+              "id",
+              existingCustomerSession.id,
+            );
+
+          if (deactivateError) {
+            console.error(
+              "Old customer session deactivate error:",
+              deactivateError,
+            );
+          }
+        }
       }
+    }
 
-      customerSession =
-        existingCustomerSession as CustomerSessionRow;
-
-      const {
-        error: lastSeenUpdateError,
-      } = await supabaseAdmin
-        .from("customer_sessions")
-        .update({
-          last_seen_at:
-            new Date().toISOString(),
-        })
-        .eq("id", customerSession.id);
-
-      if (lastSeenUpdateError) {
-        console.error(
-          "Customer session last_seen update error:",
-          lastSeenUpdateError,
-        );
-      }
-    } else {
-      /*
-       * Cookie yoxdursa, hazırkı aktiv hesab üçün
-       * yeni customer_session yaradılır.
-       */
+    /*
+     * Mövcud cookie keçərli deyilsə və ya cookie
+     * ümumiyyətlə yoxdursa, hazırkı aktiv hesab
+     * üçün yeni customer_session yaradılır.
+     */
+    if (!customerSession) {
       const userAgent =
         request.headers.get("user-agent");
 
@@ -395,8 +417,7 @@ export async function GET(
     }
 
     /*
-     * 4. Aktiv dining_session-a aid sifarişləri
-     * oxuyuruq.
+     * 4. Aktiv dining_session-a aid sifarişlər.
      */
     const {
       data: ordersData,
@@ -598,8 +619,8 @@ export async function GET(
     );
 
     /*
-     * Yalnız yeni customer_session yaradılıbsa
-     * HttpOnly cookie yazılır.
+     * Yeni customer_session yaranıbsa,
+     * cookie-ni yenisi ilə əvəz edirik.
      */
     if (newCustomerSessionToken) {
       response.cookies.set({
