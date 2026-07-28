@@ -1,5 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +38,16 @@ type OrderItemRow = {
   cancelled_at: string | null;
 };
 
+type CustomerSessionRow = {
+  id: string;
+  session_token: string;
+  dining_session_id: string;
+  is_active: boolean;
+};
+
+const CUSTOMER_SESSION_COOKIE =
+  "customer_session";
+
 const ACTIVE_SESSION_STATUSES = [
   "OPEN",
   "BILL_REQUESTED",
@@ -47,7 +60,7 @@ function canCancelItem(status: string) {
 }
 
 export async function GET(
-  _request: Request,
+  request: NextRequest,
   { params }: RouteContext,
 ) {
   try {
@@ -150,7 +163,7 @@ export async function GET(
 
     if (sessionError) {
       console.error(
-        "Customer session lookup error:",
+        "Customer dining session lookup error:",
         sessionError,
       );
 
@@ -166,22 +179,27 @@ export async function GET(
     }
 
     /*
-     * Aktiv hesab yoxdursa, boş nəticə qaytarırıq.
-     * Yeni sifariş veriləndə create_customer_order
-     * avtomatik olaraq yeni session yaradacaq.
+     * Aktiv hesab yoxdursa boş nəticə qaytarılır.
+     *
+     * Cookie silinmir. Beləliklə köhnə müştərinin
+     * brauzeri sonradan yeni hesab açılanda həmin
+     * yeni hesaba avtomatik qoşula bilməyəcək.
      */
     if (!session) {
       return NextResponse.json(
         {
           hasActiveSession: false,
+
           table: {
             id: table.id,
             number: String(
               table.table_number,
             ),
           },
+
           session: null,
           orders: [],
+
           summary: {
             subtotal: 0,
             serviceFeePercent: 0,
@@ -192,14 +210,193 @@ export async function GET(
         {
           status: 200,
           headers: {
-            "Cache-Control": "no-store",
+            "Cache-Control":
+              "no-store, no-cache, must-revalidate",
           },
         },
       );
     }
 
     /*
-     * 3. Bu session-a aid bütün sifarişləri oxuyuruq.
+     * 3. Brauzerin customer_session cookie-sini
+     * yoxlayırıq.
+     */
+    const existingSessionToken =
+      request.cookies.get(
+        CUSTOMER_SESSION_COOKIE,
+      )?.value ?? null;
+
+    let customerSession:
+      | CustomerSessionRow
+      | null = null;
+
+    let newCustomerSessionToken:
+      | string
+      | null = null;
+
+    /*
+     * Cookie varsa, yalnız həmin cookie hazırkı
+     * dining_session-a bağlı və aktivdirsə keçərlidir.
+     */
+    if (existingSessionToken) {
+      const {
+        data: existingCustomerSession,
+        error: existingCustomerSessionError,
+      } = await supabaseAdmin
+        .from("customer_sessions")
+        .select(
+          `
+            id,
+            session_token,
+            dining_session_id,
+            is_active
+          `,
+        )
+        .eq(
+          "session_token",
+          existingSessionToken,
+        )
+        .maybeSingle();
+
+      if (existingCustomerSessionError) {
+        console.error(
+          "Customer browser session lookup error:",
+          existingCustomerSessionError,
+        );
+
+        return NextResponse.json(
+          {
+            error:
+              "Müştəri sessiyası yoxlanılmadı.",
+          },
+          {
+            status: 500,
+          },
+        );
+      }
+
+      /*
+       * Cookie mövcuddur, amma:
+       * - DB-də tapılmırsa;
+       * - deaktiv edilibsə;
+       * - başqa dining_session-a aiddirsə;
+       *
+       * yeni customer_session yaratmırıq.
+       * Bu, köhnə müştərinin yeni hesabı görməsinin
+       * qarşısını alır.
+       */
+      if (
+        !existingCustomerSession ||
+        !existingCustomerSession.is_active ||
+        existingCustomerSession
+          .dining_session_id !== session.id
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Bu müştəri sessiyasının müddəti bitib. Yeni xidmət üçün QR kodu başqa brauzerdə açın.",
+            sessionExpired: true,
+          },
+          {
+            status: 403,
+            headers: {
+              "Cache-Control":
+                "no-store, no-cache, must-revalidate",
+            },
+          },
+        );
+      }
+
+      customerSession =
+        existingCustomerSession as CustomerSessionRow;
+
+      const {
+        error: lastSeenUpdateError,
+      } = await supabaseAdmin
+        .from("customer_sessions")
+        .update({
+          last_seen_at:
+            new Date().toISOString(),
+        })
+        .eq("id", customerSession.id);
+
+      if (lastSeenUpdateError) {
+        console.error(
+          "Customer session last_seen update error:",
+          lastSeenUpdateError,
+        );
+      }
+    } else {
+      /*
+       * Cookie yoxdursa, hazırkı aktiv hesab üçün
+       * yeni customer_session yaradılır.
+       */
+      const userAgent =
+        request.headers.get("user-agent");
+
+      const forwardedFor =
+        request.headers.get(
+          "x-forwarded-for",
+        );
+
+      const ipAddress =
+        forwardedFor
+          ?.split(",")[0]
+          ?.trim() || null;
+
+      const {
+        data: createdCustomerSession,
+        error: createCustomerSessionError,
+      } = await supabaseAdmin
+        .from("customer_sessions")
+        .insert({
+          dining_session_id: session.id,
+          is_active: true,
+          last_seen_at:
+            new Date().toISOString(),
+          user_agent: userAgent,
+          ip_address: ipAddress,
+        })
+        .select(
+          `
+            id,
+            session_token,
+            dining_session_id,
+            is_active
+          `,
+        )
+        .single();
+
+      if (
+        createCustomerSessionError ||
+        !createdCustomerSession
+      ) {
+        console.error(
+          "Customer browser session create error:",
+          createCustomerSessionError,
+        );
+
+        return NextResponse.json(
+          {
+            error:
+              "Müştəri sessiyası yaradılmadı.",
+          },
+          {
+            status: 500,
+          },
+        );
+      }
+
+      customerSession =
+        createdCustomerSession as CustomerSessionRow;
+
+      newCustomerSessionToken =
+        customerSession.session_token;
+    }
+
+    /*
+     * 4. Aktiv dining_session-a aid sifarişləri
+     * oxuyuruq.
      */
     const {
       data: ordersData,
@@ -246,7 +443,7 @@ export async function GET(
     let items: OrderItemRow[] = [];
 
     /*
-     * 4. Sifarişlərin məhsullarını oxuyuruq.
+     * 5. Sifariş məhsullarını oxuyuruq.
      */
     if (orderIds.length > 0) {
       const {
@@ -299,7 +496,7 @@ export async function GET(
     }
 
     /*
-     * 5. Məhsulları sifarişlər üzrə qruplaşdırırıq.
+     * 6. Məhsulları sifarişlər üzrə qruplaşdırırıq.
      */
     const responseOrders = orders.map(
       (order) => {
@@ -352,7 +549,7 @@ export async function GET(
       },
     );
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         hasActiveSession: true,
 
@@ -394,10 +591,31 @@ export async function GET(
       {
         status: 200,
         headers: {
-          "Cache-Control": "no-store",
+          "Cache-Control":
+            "no-store, no-cache, must-revalidate",
         },
       },
     );
+
+    /*
+     * Yalnız yeni customer_session yaradılıbsa
+     * HttpOnly cookie yazılır.
+     */
+    if (newCustomerSessionToken) {
+      response.cookies.set({
+        name: CUSTOMER_SESSION_COOKIE,
+        value: newCustomerSessionToken,
+        httpOnly: true,
+        secure:
+          process.env.NODE_ENV ===
+          "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30,
+      });
+    }
+
+    return response;
   } catch (error) {
     console.error(
       "Customer session route error:",
