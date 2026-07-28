@@ -323,7 +323,11 @@ export default function AccountSheet({
     const cancelledItems = allItems.filter(
         (item) => item.status === "CANCELLED",
     );
-
+    const canRequestBill =
+        activeItems.length > 0 &&
+        activeItems.every(
+            (item) => item.status === "SERVED",
+        );
     const cancelItem = async (
         itemId: string,
         itemName: string,
@@ -979,11 +983,23 @@ export default function AccountSheet({
                                     loading ||
                                     cancellingItemId !== null ||
                                     requestingBill ||
+                                    !canRequestBill ||
                                     sessionData.session?.status !==
                                     "OPEN"
                                 }
+
                                 className="mt-6 w-full rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
                             >
+                                {!canRequestBill &&
+                                    sessionData.session?.status ===
+                                    "OPEN" && (
+                                        <p className="mt-3 text-center text-sm text-neutral-500">
+                                            Hesabı yalnız bütün
+                                            sifarişlər təqdim
+                                            edildikdən sonra
+                                            istəyə bilərsiniz.
+                                        </p>
+                                    )}
                                 {sessionData.session?.status ===
                                     "BILL_REQUESTED"
                                     ? "Hesab istənilib"
@@ -1072,16 +1088,16 @@ export default function AccountSheet({
                                 }
                                 disabled={requestingBill}
                                 className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
-                                        "CASH"
-                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
-                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    "CASH"
+                                    ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                    : "border-neutral-200 bg-white hover:border-neutral-300"
                                     }`}
                             >
                                 <div
                                     className={`flex h-11 w-11 items-center justify-center rounded-2xl text-xl ${selectedPaymentMethod ===
-                                            "CASH"
-                                            ? "bg-emerald-600 text-white"
-                                            : "bg-neutral-100 text-neutral-700"
+                                        "CASH"
+                                        ? "bg-emerald-600 text-white"
+                                        : "bg-neutral-100 text-neutral-700"
                                         }`}
                                 >
                                     ₼
@@ -1105,16 +1121,16 @@ export default function AccountSheet({
                                 }
                                 disabled={requestingBill}
                                 className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
-                                        "CARD"
-                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
-                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    "CARD"
+                                    ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                    : "border-neutral-200 bg-white hover:border-neutral-300"
                                     }`}
                             >
                                 <div
                                     className={`flex h-11 w-11 items-center justify-center rounded-2xl ${selectedPaymentMethod ===
-                                            "CARD"
-                                            ? "bg-emerald-600 text-white"
-                                            : "bg-neutral-100 text-neutral-700"
+                                        "CARD"
+                                        ? "bg-emerald-600 text-white"
+                                        : "bg-neutral-100 text-neutral-700"
                                         }`}
                                 >
                                     <WalletCards size={21} />
@@ -1138,16 +1154,16 @@ export default function AccountSheet({
                                 }
                                 disabled={requestingBill}
                                 className={`rounded-2xl border p-4 text-left transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${selectedPaymentMethod ===
-                                        "OTHER"
-                                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
-                                        : "border-neutral-200 bg-white hover:border-neutral-300"
+                                    "OTHER"
+                                    ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/15"
+                                    : "border-neutral-200 bg-white hover:border-neutral-300"
                                     }`}
                             >
                                 <div
                                     className={`flex h-11 w-11 items-center justify-center rounded-2xl ${selectedPaymentMethod ===
-                                            "OTHER"
-                                            ? "bg-emerald-600 text-white"
-                                            : "bg-neutral-100 text-neutral-700"
+                                        "OTHER"
+                                        ? "bg-emerald-600 text-white"
+                                        : "bg-neutral-100 text-neutral-700"
                                         }`}
                                 >
                                     <ReceiptText size={21} />

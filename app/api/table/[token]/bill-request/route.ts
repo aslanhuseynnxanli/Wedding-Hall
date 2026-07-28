@@ -138,7 +138,43 @@ export async function POST(
                 },
             );
         }
+        const { data: pendingItems, error: pendingItemsError } =
+            await supabaseAdmin
+                .from("order_items")
+                .select("id")
+                .eq("dining_session_id", session.id)
+                .neq("status", "SERVED")
+                .neq("status", "CANCELLED")
+                .limit(1);
 
+        if (pendingItemsError) {
+            console.error(pendingItemsError);
+
+            return NextResponse.json(
+                {
+                    error:
+                        "Sifarişlər yoxlanıla bilmədi.",
+                },
+                {
+                    status: 500,
+                },
+            );
+        }
+
+        if (
+            pendingItems &&
+            pendingItems.length > 0
+        ) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Bütün sifarişlər təqdim edilmədən hesab istənilə bilməz.",
+                },
+                {
+                    status: 400,
+                },
+            );
+        }
         const now = new Date().toISOString();
 
         const { data: updatedSession, error: updateError } =
