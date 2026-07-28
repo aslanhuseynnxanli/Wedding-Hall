@@ -213,17 +213,7 @@ export async function GET(
                 },
             );
 
-            response.cookies.set({
-                name: CUSTOMER_SESSION_COOKIE,
-                value: "",
-                httpOnly: true,
-                secure:
-                    process.env.NODE_ENV ===
-                    "production",
-                sameSite: "lax",
-                path: "/",
-                maxAge: 0,
-            });
+
 
             return response;
         }
@@ -315,18 +305,11 @@ export async function GET(
                         lastSeenUpdateError,
                     );
                 }
-            } else {
-                /*
-                 * Köhnə və ya başqa dining_session-a aid
-                 * customer_session varsa deaktiv edirik.
-                 *
-                 * Əvvəlki kod burada 403 qaytarırdı.
-                 * Problem məhz həmin hissədən yaranırdı.
-                 */
-                if (
-                    existingCustomerSession?.id &&
-                    existingCustomerSession.is_active
-                ) {
+            }
+            else if (existingCustomerSession) {
+
+                if (existingCustomerSession.is_active) {
+
                     const {
                         error: deactivateError,
                     } = await supabaseAdmin
@@ -334,10 +317,7 @@ export async function GET(
                         .update({
                             is_active: false,
                         })
-                        .eq(
-                            "id",
-                            existingCustomerSession.id,
-                        );
+                        .eq("id", existingCustomerSession.id);
 
                     if (deactivateError) {
                         console.error(
@@ -346,6 +326,7 @@ export async function GET(
                         );
                     }
                 }
+
                 sessionExpired = true;
             }
         }
@@ -365,15 +346,7 @@ export async function GET(
                 },
             );
 
-            response.cookies.set({
-                name: CUSTOMER_SESSION_COOKIE,
-                value: "",
-                httpOnly: true,
-                secure: process.env.NODE_ENV === "production",
-                sameSite: "lax",
-                path: "/",
-                maxAge: 0,
-            });
+
 
             return response;
         }
