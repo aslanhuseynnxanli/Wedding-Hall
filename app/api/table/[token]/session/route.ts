@@ -60,6 +60,9 @@ function canCancelItem(status: string) {
 }
 
 const DEFAULT_CUSTOMER_ORDER_RADIUS_METERS = 30;
+const MAX_CUSTOMER_ACCURACY_METERS = 100;
+const MAX_CUSTOMER_ACCURACY_ALLOWANCE_METERS = 35;
+const MAX_RESTAURANT_ACCURACY_ALLOWANCE_METERS = 20;
 const EARTH_RADIUS_METERS = 6_371_000;
 
 function parseCoordinate(
@@ -79,6 +82,20 @@ function parseCoordinate(
         parsedValue > maximum
     ) {
         return null;
+    }
+
+    return parsedValue;
+}
+
+function parseAccuracyMeters(value: string | null) {
+    if (value === null || value.trim() === "") {
+        return 0;
+    }
+
+    const parsedValue = Number(value);
+
+    if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+        return 0;
     }
 
     return parsedValue;
@@ -207,6 +224,13 @@ export async function GET(
             180,
         );
 
+        const customerAccuracyMeters =
+            parseAccuracyMeters(
+                request.nextUrl.searchParams.get(
+                    "accuracy",
+                ),
+            );
+
         if (
             customerLatitude === null ||
             customerLongitude === null
@@ -219,6 +243,30 @@ export async function GET(
                 },
                 {
                     status: 400,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        if (
+            customerAccuracyMeters >
+            MAX_CUSTOMER_ACCURACY_METERS
+        ) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Məkan dəqiqliyi kifayət deyil. Pəncərəyə və ya açıq sahəyə yaxınlaşıb yenidən yoxlayın.",
+                    code: "LOCATION_ACCURACY_TOO_LOW",
+                    accuracyMeters: Math.round(
+                        customerAccuracyMeters,
+                    ),
+                    maximumAccuracyMeters:
+                        MAX_CUSTOMER_ACCURACY_METERS,
+                },
+                {
+                    status: 422,
                     headers: {
                         "Cache-Control": "no-store",
                     },
@@ -240,6 +288,7 @@ export async function GET(
           id,
           latitude,
           longitude,
+          location_accuracy_meters,
           customer_order_radius_meters
         `,
             )
@@ -317,6 +366,33 @@ export async function GET(
                 ? configuredRadius
                 : DEFAULT_CUSTOMER_ORDER_RADIUS_METERS;
 
+        const restaurantAccuracyValue = Number(
+            restaurant.location_accuracy_meters,
+        );
+
+        const restaurantAccuracyMeters =
+            Number.isFinite(restaurantAccuracyValue) &&
+            restaurantAccuracyValue > 0
+                ? restaurantAccuracyValue
+                : 0;
+
+        const customerAccuracyAllowanceMeters =
+            Math.min(
+                customerAccuracyMeters,
+                MAX_CUSTOMER_ACCURACY_ALLOWANCE_METERS,
+            );
+
+        const restaurantAccuracyAllowanceMeters =
+            Math.min(
+                restaurantAccuracyMeters,
+                MAX_RESTAURANT_ACCURACY_ALLOWANCE_METERS,
+            );
+
+        const effectiveRadiusMeters =
+            allowedRadiusMeters +
+            customerAccuracyAllowanceMeters +
+            restaurantAccuracyAllowanceMeters;
+
         const distanceMeters =
             calculateDistanceMeters(
                 customerLatitude,
@@ -325,19 +401,29 @@ export async function GET(
                 restaurantLongitude,
             );
 
-        if (distanceMeters > allowedRadiusMeters) {
+        const locationCheck = {
+            distanceMeters: Math.round(distanceMeters),
+            baseRadiusMeters: Math.round(
+                allowedRadiusMeters,
+            ),
+            effectiveRadiusMeters: Math.round(
+                effectiveRadiusMeters,
+            ),
+            customerAccuracyMeters: Math.round(
+                customerAccuracyMeters,
+            ),
+            restaurantAccuracyMeters: Math.round(
+                restaurantAccuracyMeters,
+            ),
+        };
+
+        if (distanceMeters > effectiveRadiusMeters) {
             return NextResponse.json(
                 {
                     error:
                         "Siz restoranın sifariş zonasından kənardasınız. Restorana yaxınlaşın və yenidən yoxlayın.",
                     code: "OUTSIDE_ORDER_RADIUS",
-                    distanceMeters: Math.round(
-                        distanceMeters,
-                    ),
-                    allowedRadiusMeters:
-                        Math.round(
-                            allowedRadiusMeters,
-                        ),
+                    ...locationCheck,
                 },
                 {
                     status: 403,
@@ -424,6 +510,8 @@ export async function GET(
                         serviceFeeAmount: 0,
                         total: 0,
                     },
+
+                    locationCheck,
                 },
                 {
                     status: 200,
@@ -827,6 +915,8 @@ export async function GET(
                     ),
                     total: Number(session.total),
                 },
+
+                locationCheck,
             },
             {
                 status: 200,

@@ -101,6 +101,14 @@ export interface CustomerSessionResponse {
     serviceFeeAmount: number;
     total: number;
   };
+
+  locationCheck?: {
+    distanceMeters: number;
+    baseRadiusMeters: number;
+    effectiveRadiusMeters: number;
+    customerAccuracyMeters: number;
+    restaurantAccuracyMeters: number;
+  };
 }
 
 interface CustomerCoordinates {
@@ -108,6 +116,185 @@ interface CustomerCoordinates {
   longitude: number;
   accuracy: number;
   capturedAt: number;
+}
+
+type LocationRequestError = Error & {
+  code?: number;
+};
+
+const LOCATION_CACHE_DURATION_MS = 30_000;
+const LOCATION_SAMPLE_DURATION_MS = 15_000;
+const TARGET_LOCATION_ACCURACY_METERS = 25;
+
+function createLocationRequestError(
+  message: string,
+  code?: number,
+): LocationRequestError {
+  const error = new Error(message) as LocationRequestError;
+  error.code = code;
+  return error;
+}
+
+function getLocationError(
+  error: GeolocationPositionError,
+): LocationRequestError {
+  if (error.code === error.PERMISSION_DENIED) {
+    return createLocationRequestError(
+      "Menyunu açmaq üçün məkan icazəsi verməlisiniz.",
+      error.code,
+    );
+  }
+
+  if (error.code === error.POSITION_UNAVAILABLE) {
+    return createLocationRequestError(
+      "Məkanınız müəyyən edilə bilmədi. GPS və Precise Location aktiv olmalıdır.",
+      error.code,
+    );
+  }
+
+  if (error.code === error.TIMEOUT) {
+    return createLocationRequestError(
+      "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
+      error.code,
+    );
+  }
+
+  return createLocationRequestError(
+    "Məkan məlumatı alınarkən xəta baş verdi.",
+    error.code,
+  );
+}
+
+function requestBestCoordinates(): Promise<CustomerCoordinates> {
+  if (
+    typeof window === "undefined" ||
+    !("geolocation" in navigator)
+  ) {
+    return Promise.reject(
+      createLocationRequestError(
+        "Bu cihaz məkan məlumatını dəstəkləmir.",
+      ),
+    );
+  }
+
+  return new Promise<CustomerCoordinates>(
+    (resolve, reject) => {
+      let bestCoordinates: CustomerCoordinates | null = null;
+      let watchId: number | null = null;
+      let timeoutId: number | null = null;
+      let completed = false;
+
+      const cleanup = () => {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+        }
+
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+        }
+      };
+
+      const finish = (
+        coordinates?: CustomerCoordinates,
+        error?: LocationRequestError,
+      ) => {
+        if (completed) return;
+
+        completed = true;
+        cleanup();
+
+        if (coordinates) {
+          resolve(coordinates);
+          return;
+        }
+
+        reject(
+          error ??
+            createLocationRequestError(
+              "Məkan məlumatı alınmadı. Yenidən yoxlayın.",
+            ),
+        );
+      };
+
+      timeoutId = window.setTimeout(() => {
+        if (bestCoordinates) {
+          finish(bestCoordinates);
+          return;
+        }
+
+        finish(
+          undefined,
+          createLocationRequestError(
+            "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
+            3,
+          ),
+        );
+      }, LOCATION_SAMPLE_DURATION_MS);
+
+      watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          const latitude = position.coords.latitude;
+          const longitude = position.coords.longitude;
+          const rawAccuracy = position.coords.accuracy;
+
+          if (
+            !Number.isFinite(latitude) ||
+            !Number.isFinite(longitude)
+          ) {
+            return;
+          }
+
+          const accuracy =
+            Number.isFinite(rawAccuracy) && rawAccuracy > 0
+              ? rawAccuracy
+              : 9_999;
+
+          const coordinates: CustomerCoordinates = {
+            latitude,
+            longitude,
+            accuracy,
+            capturedAt: Date.now(),
+          };
+
+          if (
+            !bestCoordinates ||
+            coordinates.accuracy < bestCoordinates.accuracy
+          ) {
+            bestCoordinates = coordinates;
+          }
+
+          if (
+            coordinates.accuracy <=
+            TARGET_LOCATION_ACCURACY_METERS
+          ) {
+            finish(coordinates);
+          }
+        },
+        (error) => {
+          if (error.code === error.PERMISSION_DENIED) {
+            finish(undefined, getLocationError(error));
+            return;
+          }
+
+          if (bestCoordinates) {
+            finish(bestCoordinates);
+            return;
+          }
+
+          finish(undefined, getLocationError(error));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: LOCATION_SAMPLE_DURATION_MS,
+          maximumAge: 0,
+        },
+      );
+
+      if (completed && watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    },
+  );
 }
 
 function isIosDevice() {
@@ -183,14 +370,12 @@ export default function CustomerMenu({
     async (
       forceRefresh = false,
     ): Promise<CustomerCoordinates> => {
-      const cachedCoordinates =
-        coordinatesRef.current;
+      const cachedCoordinates = coordinatesRef.current;
 
       const cacheIsFresh =
         cachedCoordinates &&
-        Date.now() -
-          cachedCoordinates.capturedAt <
-          60_000;
+        Date.now() - cachedCoordinates.capturedAt <
+          LOCATION_CACHE_DURATION_MS;
 
       if (!forceRefresh && cacheIsFresh) {
         return cachedCoordinates;
@@ -200,101 +385,12 @@ export default function CustomerMenu({
         return locationRequestRef.current;
       }
 
-      if (
-        typeof window === "undefined" ||
-        !("geolocation" in navigator)
-      ) {
-        throw new Error(
-          "Bu cihaz məkan məlumatını dəstəkləmir.",
-        );
-      }
-
-      const locationRequest =
-        new Promise<CustomerCoordinates>(
-          (resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                const coordinates: CustomerCoordinates = {
-                  latitude:
-                    position.coords.latitude,
-                  longitude:
-                    position.coords.longitude,
-                  accuracy:
-                    position.coords.accuracy,
-                  capturedAt: Date.now(),
-                };
-
-                if (
-                  !Number.isFinite(
-                    coordinates.latitude,
-                  ) ||
-                  !Number.isFinite(
-                    coordinates.longitude,
-                  )
-                ) {
-                  reject(
-                    new Error(
-                      "Məkan məlumatı düzgün alınmadı.",
-                    ),
-                  );
-
-                  return;
-                }
-
-                coordinatesRef.current = coordinates;
-                resolve(coordinates);
-              },
-              (error) => {
-                if (
-                  error.code ===
-                  error.PERMISSION_DENIED
-                ) {
-                  reject(
-                    new Error(
-                      "Menyunu açmaq üçün məkan icazəsi verməlisiniz.",
-                    ),
-                  );
-
-                  return;
-                }
-
-                if (
-                  error.code ===
-                  error.POSITION_UNAVAILABLE
-                ) {
-                  reject(
-                    new Error(
-                      "Məkanınız müəyyən edilə bilmədi. GPS-i aktiv edib yenidən yoxlayın.",
-                    ),
-                  );
-
-                  return;
-                }
-
-                if (error.code === error.TIMEOUT) {
-                  reject(
-                    new Error(
-                      "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
-                    ),
-                  );
-
-                  return;
-                }
-
-                reject(
-                  new Error(
-                    "Məkan məlumatı alınarkən xəta baş verdi.",
-                  ),
-                );
-              },
-              {
-                enableHighAccuracy: true,
-                timeout: 20_000,
-                maximumAge: 0,
-              },
-            );
-          },
-        ).finally(() => {
+      const locationRequest = requestBestCoordinates()
+        .then((coordinates) => {
+          coordinatesRef.current = coordinates;
+          return coordinates;
+        })
+        .finally(() => {
           locationRequestRef.current = null;
         });
 
@@ -393,29 +489,26 @@ export default function CustomerMenu({
       return;
     }
 
-    // iOS Safari-də icazə pəncərəsinin görünməsi üçün
-    // geolocation çağırışı birbaşa istifadəçinin klikindən edilir.
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const coordinates: CustomerCoordinates = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          capturedAt: Date.now(),
-        };
+    // watchPosition çağırışı birbaşa klik daxilində başlayır.
+    // iOS bir neçə saniyə ərzində daha dəqiq nəticə verə bilər;
+    // ən yaxşı accuracy dəyəri seçilir.
+    const locationRequest = requestBestCoordinates();
 
+    locationRequestRef.current = locationRequest;
+
+    void locationRequest
+      .then((coordinates) => {
         coordinatesRef.current = coordinates;
         locationRequestRef.current = null;
         setShowIosLocationHelp(false);
 
-        // Koordinat artıq cache-dədir; loadSession ikinci dəfə
-        // permission istəmədən həmin koordinatı istifadə edəcək.
-        void loadSession(false);
-      },
-      (error) => {
+        return loadSession(false);
+      })
+      .catch((error: LocationRequestError) => {
+        locationRequestRef.current = null;
         setLoadingSession(false);
 
-        if (error.code === error.PERMISSION_DENIED) {
+        if (error.code === 1) {
           const ios = isIosDevice();
           setShowIosLocationHelp(ios);
 
@@ -423,36 +516,18 @@ export default function CustomerMenu({
             ios
               ? isLikelyEmbeddedIosBrowser()
                 ? "iPhone-da QR linki tətbiqin daxili pəncərəsində açılıb. Linki Safari-də açın və yenidən məkan icazəsi verin."
-                : "iPhone məkan icazəsini göstərmədi və ya bu sayt üçün əvvəl bloklanıb. Səhifəni Safari-də açıb yenidən yoxlayın."
+                : "Bu sayt üçün məkan icazəsi əvvəl bloklanıbsa, Safari Website Settings bölməsində Location → Ask seçin."
               : "Menyunu açmaq üçün məkan icazəsi verməlisiniz.",
           );
           return;
         }
 
-        if (error.code === error.POSITION_UNAVAILABLE) {
-          setSessionError(
-            "Məkanınız müəyyən edilə bilmədi. Location Services və Precise Location aktiv olmalıdır.",
-          );
-          return;
-        }
-
-        if (error.code === error.TIMEOUT) {
-          setSessionError(
-            "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
-          );
-          return;
-        }
-
         setSessionError(
-          "Məkan məlumatı alınarkən xəta baş verdi.",
+          error instanceof Error
+            ? error.message
+            : "Məkan məlumatı alınarkən xəta baş verdi.",
         );
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 20_000,
-        maximumAge: 0,
-      },
-    );
+      });
   }, [loadSession]);
 
   useEffect(() => {
@@ -704,7 +779,7 @@ export default function CustomerMenu({
 
           <p className="mt-3 text-sm leading-6 text-neutral-500">
             {loadingSession
-              ? "Sifariş vermək üçün restorana yaxın olduğunuz təsdiqlənir. Bir neçə saniyə gözləyin."
+              ? "GPS dəqiqliyi yaxşılaşdırılır və restorana yaxın olduğunuz yoxlanılır. Bu proses 5–15 saniyə çəkə bilər."
               : isInitialLocationStep
                 ? "Aşağıdakı düyməyə toxunduqda brauzerin rəsmi məkan icazəsi pəncərəsi açılacaq. Allow / İcazə ver seçin."
                 : sessionError ??
