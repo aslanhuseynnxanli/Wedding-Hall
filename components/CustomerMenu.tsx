@@ -110,6 +110,29 @@ interface CustomerCoordinates {
   capturedAt: number;
 }
 
+function isIosDevice() {
+  if (typeof navigator === "undefined") return false;
+
+  return (
+    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" &&
+      navigator.maxTouchPoints > 1)
+  );
+}
+
+function isLikelyEmbeddedIosBrowser() {
+  if (typeof navigator === "undefined") return false;
+
+  const userAgent = navigator.userAgent;
+
+  return (
+    isIosDevice() &&
+    /FBAN|FBAV|Instagram|Line|Telegram|GSA|TikTok|Snapchat/i.test(
+      userAgent,
+    )
+  );
+}
+
 export default function CustomerMenu({
   token,
   table,
@@ -132,6 +155,9 @@ export default function CustomerMenu({
     useState(false);
 
   const [locationStarted, setLocationStarted] =
+    useState(false);
+
+  const [showIosLocationHelp, setShowIosLocationHelp] =
     useState(false);
 
   const [sessionError, setSessionError] =
@@ -341,6 +367,93 @@ export default function CustomerMenu({
     },
     [getCurrentCoordinates, token],
   );
+
+  const requestLocationFromButton = useCallback(() => {
+    setLocationStarted(true);
+    setLoadingSession(true);
+    setSessionError(null);
+    setShowIosLocationHelp(false);
+
+    if (
+      typeof window === "undefined" ||
+      !window.isSecureContext
+    ) {
+      setLoadingSession(false);
+      setSessionError(
+        "Məkan icazəsi yalnız HTTPS bağlantısında işləyir.",
+      );
+      return;
+    }
+
+    if (!("geolocation" in navigator)) {
+      setLoadingSession(false);
+      setSessionError(
+        "Bu brauzer məkan məlumatını dəstəkləmir.",
+      );
+      return;
+    }
+
+    // iOS Safari-də icazə pəncərəsinin görünməsi üçün
+    // geolocation çağırışı birbaşa istifadəçinin klikindən edilir.
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coordinates: CustomerCoordinates = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          capturedAt: Date.now(),
+        };
+
+        coordinatesRef.current = coordinates;
+        locationRequestRef.current = null;
+        setShowIosLocationHelp(false);
+
+        // Koordinat artıq cache-dədir; loadSession ikinci dəfə
+        // permission istəmədən həmin koordinatı istifadə edəcək.
+        void loadSession(false);
+      },
+      (error) => {
+        setLoadingSession(false);
+
+        if (error.code === error.PERMISSION_DENIED) {
+          const ios = isIosDevice();
+          setShowIosLocationHelp(ios);
+
+          setSessionError(
+            ios
+              ? isLikelyEmbeddedIosBrowser()
+                ? "iPhone-da QR linki tətbiqin daxili pəncərəsində açılıb. Linki Safari-də açın və yenidən məkan icazəsi verin."
+                : "iPhone məkan icazəsini göstərmədi və ya bu sayt üçün əvvəl bloklanıb. Səhifəni Safari-də açıb yenidən yoxlayın."
+              : "Menyunu açmaq üçün məkan icazəsi verməlisiniz.",
+          );
+          return;
+        }
+
+        if (error.code === error.POSITION_UNAVAILABLE) {
+          setSessionError(
+            "Məkanınız müəyyən edilə bilmədi. Location Services və Precise Location aktiv olmalıdır.",
+          );
+          return;
+        }
+
+        if (error.code === error.TIMEOUT) {
+          setSessionError(
+            "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
+          );
+          return;
+        }
+
+        setSessionError(
+          "Məkan məlumatı alınarkən xəta baş verdi.",
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 20_000,
+        maximumAge: 0,
+      },
+    );
+  }, [loadSession]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -601,16 +714,36 @@ export default function CustomerMenu({
           {!loadingSession && (
             <button
               type="button"
-              onClick={() => {
-                setLocationStarted(true);
-                void loadSession(true);
-              }}
+              onClick={requestLocationFromButton}
               className="mt-7 w-full rounded-2xl bg-neutral-950 px-5 py-4 text-sm font-bold text-white transition active:scale-[0.98]"
             >
               {isInitialLocationStep
                 ? "Məkan icazəsi ver və menyunu aç"
                 : "Yenidən yoxla"}
             </button>
+          )}
+
+          {showIosLocationHelp && !loadingSession && (
+            <div className="mt-5 rounded-2xl bg-amber-50 p-4 text-left">
+              <p className="text-sm font-bold text-amber-950">
+                iPhone üçün
+              </p>
+              <p className="mt-1 text-xs leading-5 text-amber-800">
+                QR linki daxili skaner pəncərəsində açılıbsa, aşağıdakı düymə ilə Safari-də açın. Safari ilk girişdə rəsmi Location icazəsini göstərəcək.
+              </p>
+              <a
+                href={
+                  typeof window !== "undefined"
+                    ? window.location.href
+                    : "#"
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-amber-950 px-4 py-3 text-xs font-bold text-white"
+              >
+                Safari-də aç
+              </a>
+            </div>
           )}
 
           {isInitialLocationStep && (
