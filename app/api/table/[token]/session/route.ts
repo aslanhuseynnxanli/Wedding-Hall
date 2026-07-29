@@ -59,6 +59,71 @@ function canCancelItem(status: string) {
     return status === "NEW";
 }
 
+const DEFAULT_CUSTOMER_ORDER_RADIUS_METERS = 30;
+const EARTH_RADIUS_METERS = 6_371_000;
+
+function parseCoordinate(
+    value: string | null,
+    minimum: number,
+    maximum: number,
+) {
+    if (value === null || value.trim() === "") {
+        return null;
+    }
+
+    const parsedValue = Number(value);
+
+    if (
+        !Number.isFinite(parsedValue) ||
+        parsedValue < minimum ||
+        parsedValue > maximum
+    ) {
+        return null;
+    }
+
+    return parsedValue;
+}
+
+function toRadians(value: number) {
+    return (value * Math.PI) / 180;
+}
+
+function calculateDistanceMeters(
+    firstLatitude: number,
+    firstLongitude: number,
+    secondLatitude: number,
+    secondLongitude: number,
+) {
+    const latitudeDifference = toRadians(
+        secondLatitude - firstLatitude,
+    );
+
+    const longitudeDifference = toRadians(
+        secondLongitude - firstLongitude,
+    );
+
+    const firstLatitudeRadians =
+        toRadians(firstLatitude);
+
+    const secondLatitudeRadians =
+        toRadians(secondLatitude);
+
+    const haversineValue =
+        Math.sin(latitudeDifference / 2) ** 2 +
+        Math.cos(firstLatitudeRadians) *
+            Math.cos(secondLatitudeRadians) *
+            Math.sin(longitudeDifference / 2) ** 2;
+
+    const centralAngle =
+        2 *
+        Math.atan2(
+            Math.sqrt(haversineValue),
+            Math.sqrt(1 - haversineValue),
+        );
+
+    return EARTH_RADIUS_METERS * centralAngle;
+}
+
 export async function GET(
     request: NextRequest,
     { params }: RouteContext,
@@ -128,7 +193,163 @@ export async function GET(
         }
 
         /*
-         * 2. Masanın aktiv hesabını tapırıq.
+         * 2. Müştərinin koordinatlarını yoxlayırıq.
+         */
+        const customerLatitude = parseCoordinate(
+            request.nextUrl.searchParams.get("lat"),
+            -90,
+            90,
+        );
+
+        const customerLongitude = parseCoordinate(
+            request.nextUrl.searchParams.get("lng"),
+            -180,
+            180,
+        );
+
+        if (
+            customerLatitude === null ||
+            customerLongitude === null
+        ) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Menyunu açmaq üçün məkan məlumatınızı paylaşmalısınız.",
+                    code: "LOCATION_REQUIRED",
+                },
+                {
+                    status: 400,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        /*
+         * 3. Restoranın koordinatlarını və icazə verilən
+         * sifariş radiusunu oxuyuruq.
+         */
+        const {
+            data: restaurant,
+            error: restaurantError,
+        } = await supabaseAdmin
+            .from("restaurants")
+            .select(
+                `
+          id,
+          latitude,
+          longitude,
+          customer_order_radius_meters
+        `,
+            )
+            .eq("id", table.restaurant_id)
+            .maybeSingle();
+
+        if (restaurantError) {
+            console.error(
+                "Customer restaurant location error:",
+                restaurantError,
+            );
+
+            return NextResponse.json(
+                {
+                    error:
+                        "Restoranın məkan məlumatı oxunmadı.",
+                },
+                {
+                    status: 500,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        if (!restaurant) {
+            return NextResponse.json(
+                {
+                    error: "Restoran tapılmadı.",
+                },
+                {
+                    status: 404,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        const restaurantLatitude = Number(
+            restaurant.latitude,
+        );
+
+        const restaurantLongitude = Number(
+            restaurant.longitude,
+        );
+
+        if (
+            !Number.isFinite(restaurantLatitude) ||
+            !Number.isFinite(restaurantLongitude)
+        ) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Restoranın məkan məlumatı hələ qurulmayıb.",
+                    code: "RESTAURANT_LOCATION_NOT_CONFIGURED",
+                },
+                {
+                    status: 503,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        const configuredRadius = Number(
+            restaurant.customer_order_radius_meters,
+        );
+
+        const allowedRadiusMeters =
+            Number.isFinite(configuredRadius) &&
+            configuredRadius > 0
+                ? configuredRadius
+                : DEFAULT_CUSTOMER_ORDER_RADIUS_METERS;
+
+        const distanceMeters =
+            calculateDistanceMeters(
+                customerLatitude,
+                customerLongitude,
+                restaurantLatitude,
+                restaurantLongitude,
+            );
+
+        if (distanceMeters > allowedRadiusMeters) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Siz restoranın sifariş zonasından kənardasınız. Restorana yaxınlaşın və yenidən yoxlayın.",
+                    code: "OUTSIDE_ORDER_RADIUS",
+                    distanceMeters: Math.round(
+                        distanceMeters,
+                    ),
+                    allowedRadiusMeters:
+                        Math.round(
+                            allowedRadiusMeters,
+                        ),
+                },
+                {
+                    status: 403,
+                    headers: {
+                        "Cache-Control": "no-store",
+                    },
+                },
+            );
+        }
+
+        /*
+         * 4. Masanın aktiv hesabını tapırıq.
          */
         const {
             data: session,

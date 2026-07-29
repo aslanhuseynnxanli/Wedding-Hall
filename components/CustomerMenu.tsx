@@ -103,6 +103,13 @@ export interface CustomerSessionResponse {
   };
 }
 
+interface CustomerCoordinates {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  capturedAt: number;
+}
+
 export default function CustomerMenu({
   token,
   table,
@@ -135,52 +142,202 @@ export default function CustomerMenu({
     Record<string, HTMLElement | null>
   >({});
 
-  const loadSession = useCallback(async () => {
-    try {
-      setLoadingSession(true);
-      setSessionError(null);
+  const coordinatesRef =
+    useRef<CustomerCoordinates | null>(null);
 
-      const response = await fetch(
-        `/api/table/${encodeURIComponent(token)}/session`,
-        {
-          method: "GET",
-          cache: "no-store",
-          headers: {
-            Accept: "application/json",
-          },
-        },
-      );
+  const locationRequestRef =
+    useRef<Promise<CustomerCoordinates> | null>(
+      null,
+    );
 
-      const result = await response
-        .json()
-        .catch(() => null);
+  const getCurrentCoordinates = useCallback(
+    async (
+      forceRefresh = false,
+    ): Promise<CustomerCoordinates> => {
+      const cachedCoordinates =
+        coordinatesRef.current;
 
-      if (!response.ok) {
+      const cacheIsFresh =
+        cachedCoordinates &&
+        Date.now() -
+          cachedCoordinates.capturedAt <
+          60_000;
+
+      if (!forceRefresh && cacheIsFresh) {
+        return cachedCoordinates;
+      }
+
+      if (locationRequestRef.current) {
+        return locationRequestRef.current;
+      }
+
+      if (
+        typeof window === "undefined" ||
+        !("geolocation" in navigator)
+      ) {
         throw new Error(
-          result?.error ??
-            "Masanın açıq hesabı oxunmadı.",
+          "Bu cihaz məkan məlumatını dəstəkləmir.",
         );
       }
 
-      setSessionData(
-        result as CustomerSessionResponse,
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Masanın açıq hesabı oxunarkən xəta baş verdi.";
+      const locationRequest =
+        new Promise<CustomerCoordinates>(
+          (resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                const coordinates: CustomerCoordinates = {
+                  latitude:
+                    position.coords.latitude,
+                  longitude:
+                    position.coords.longitude,
+                  accuracy:
+                    position.coords.accuracy,
+                  capturedAt: Date.now(),
+                };
 
-      console.error(
-        "Customer session load error:",
-        error,
-      );
+                if (
+                  !Number.isFinite(
+                    coordinates.latitude,
+                  ) ||
+                  !Number.isFinite(
+                    coordinates.longitude,
+                  )
+                ) {
+                  reject(
+                    new Error(
+                      "Məkan məlumatı düzgün alınmadı.",
+                    ),
+                  );
 
-      setSessionError(message);
-    } finally {
-      setLoadingSession(false);
-    }
-  }, [token]);
+                  return;
+                }
+
+                coordinatesRef.current = coordinates;
+                resolve(coordinates);
+              },
+              (error) => {
+                if (
+                  error.code ===
+                  error.PERMISSION_DENIED
+                ) {
+                  reject(
+                    new Error(
+                      "Menyunu açmaq üçün məkan icazəsi verməlisiniz.",
+                    ),
+                  );
+
+                  return;
+                }
+
+                if (
+                  error.code ===
+                  error.POSITION_UNAVAILABLE
+                ) {
+                  reject(
+                    new Error(
+                      "Məkanınız müəyyən edilə bilmədi. GPS-i aktiv edib yenidən yoxlayın.",
+                    ),
+                  );
+
+                  return;
+                }
+
+                if (error.code === error.TIMEOUT) {
+                  reject(
+                    new Error(
+                      "Məkanın müəyyən edilməsi vaxtı bitdi. Yenidən yoxlayın.",
+                    ),
+                  );
+
+                  return;
+                }
+
+                reject(
+                  new Error(
+                    "Məkan məlumatı alınarkən xəta baş verdi.",
+                  ),
+                );
+              },
+              {
+                enableHighAccuracy: true,
+                timeout: 20_000,
+                maximumAge: 0,
+              },
+            );
+          },
+        ).finally(() => {
+          locationRequestRef.current = null;
+        });
+
+      locationRequestRef.current = locationRequest;
+
+      return locationRequest;
+    },
+    [],
+  );
+
+  const loadSession = useCallback(
+    async (forceLocationRefresh = false) => {
+      try {
+        setLoadingSession(true);
+        setSessionError(null);
+
+        const coordinates =
+          await getCurrentCoordinates(
+            forceLocationRefresh,
+          );
+
+        const query = new URLSearchParams({
+          lat: String(coordinates.latitude),
+          lng: String(coordinates.longitude),
+          accuracy: String(coordinates.accuracy),
+        });
+
+        const response = await fetch(
+          `/api/table/${encodeURIComponent(token)}/session?${query.toString()}`,
+          {
+            method: "GET",
+            cache: "no-store",
+            credentials: "include",
+            headers: {
+              Accept: "application/json",
+            },
+          },
+        );
+
+        const result = await response
+          .json()
+          .catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(
+            result?.error ??
+              result?.message ??
+              "Masanın açıq hesabı oxunmadı.",
+          );
+        }
+
+        setSessionData(
+          result as CustomerSessionResponse,
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Masanın açıq hesabı oxunarkən xəta baş verdi.";
+
+        console.error(
+          "Customer session load error:",
+          error,
+        );
+
+        setSessionError(message);
+      } finally {
+        setLoadingSession(false);
+      }
+    },
+    [getCurrentCoordinates, token],
+  );
 
   useEffect(() => {
     void loadSession();
@@ -408,6 +565,47 @@ export default function CustomerMenu({
     } finally {
       setSending(false);
     }
+  }
+
+  if (!sessionData) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-neutral-100 px-5 py-10">
+        <section className="w-full max-w-md rounded-[32px] bg-white p-7 text-center shadow-xl shadow-black/5">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-neutral-950 text-2xl text-white">
+            {loadingSession ? "…" : "!"}
+          </div>
+
+          <p className="mt-6 text-xs font-bold uppercase tracking-[0.22em] text-neutral-400">
+            {restaurant.name}
+          </p>
+
+          <h1 className="mt-3 text-2xl font-black text-neutral-950">
+            {loadingSession
+              ? "Məkanınız yoxlanılır"
+              : "Menyu açıla bilmədi"}
+          </h1>
+
+          <p className="mt-3 text-sm leading-6 text-neutral-500">
+            {loadingSession
+              ? "Sifariş vermək üçün restorana yaxın olduğunuz təsdiqlənir. Zəhmət olmasa GPS-i və məkan icazəsini aktiv saxlayın."
+              : sessionError ??
+                "Məkan yoxlaması zamanı xəta baş verdi."}
+          </p>
+
+          {!loadingSession && (
+            <button
+              type="button"
+              onClick={() => {
+                void loadSession(true);
+              }}
+              className="mt-7 w-full rounded-2xl bg-neutral-950 px-5 py-4 text-sm font-bold text-white transition active:scale-[0.98]"
+            >
+              Yenidən yoxla
+            </button>
+          )}
+        </section>
+      </main>
+    );
   }
 
   return (
