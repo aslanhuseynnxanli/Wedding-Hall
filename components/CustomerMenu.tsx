@@ -129,7 +129,10 @@ export default function CustomerMenu({
     useState<CustomerSessionResponse | null>(null);
 
   const [loadingSession, setLoadingSession] =
-    useState(true);
+    useState(false);
+
+  const [locationStarted, setLocationStarted] =
+    useState(false);
 
   const [sessionError, setSessionError] =
     useState<string | null>(null);
@@ -338,10 +341,6 @@ export default function CustomerMenu({
     },
     [getCurrentCoordinates, token],
   );
-
-  useEffect(() => {
-    void loadSession();
-  }, [loadSession]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -568,11 +567,14 @@ export default function CustomerMenu({
   }
 
   if (!sessionData) {
+    const isInitialLocationStep =
+      !locationStarted && !loadingSession && !sessionError;
+
     return (
       <main className="flex min-h-screen items-center justify-center bg-neutral-100 px-5 py-10">
         <section className="w-full max-w-md rounded-[32px] bg-white p-7 text-center shadow-xl shadow-black/5">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-neutral-950 text-2xl text-white">
-            {loadingSession ? "…" : "!"}
+            {loadingSession ? "…" : isInitialLocationStep ? "⌖" : "!"}
           </div>
 
           <p className="mt-6 text-xs font-bold uppercase tracking-[0.22em] text-neutral-400">
@@ -582,26 +584,39 @@ export default function CustomerMenu({
           <h1 className="mt-3 text-2xl font-black text-neutral-950">
             {loadingSession
               ? "Məkanınız yoxlanılır"
-              : "Menyu açıla bilmədi"}
+              : isInitialLocationStep
+                ? "Menyunu açmaq üçün məkan icazəsi"
+                : "Menyu açıla bilmədi"}
           </h1>
 
           <p className="mt-3 text-sm leading-6 text-neutral-500">
             {loadingSession
-              ? "Sifariş vermək üçün restorana yaxın olduğunuz təsdiqlənir. Zəhmət olmasa GPS-i və məkan icazəsini aktiv saxlayın."
-              : sessionError ??
-                "Məkan yoxlaması zamanı xəta baş verdi."}
+              ? "Sifariş vermək üçün restorana yaxın olduğunuz təsdiqlənir. Bir neçə saniyə gözləyin."
+              : isInitialLocationStep
+                ? "Aşağıdakı düyməyə toxunduqda brauzerin rəsmi məkan icazəsi pəncərəsi açılacaq. Allow / İcazə ver seçin."
+                : sessionError ??
+                  "Məkan yoxlaması zamanı xəta baş verdi."}
           </p>
 
           {!loadingSession && (
             <button
               type="button"
               onClick={() => {
+                setLocationStarted(true);
                 void loadSession(true);
               }}
               className="mt-7 w-full rounded-2xl bg-neutral-950 px-5 py-4 text-sm font-bold text-white transition active:scale-[0.98]"
             >
-              Yenidən yoxla
+              {isInitialLocationStep
+                ? "Məkan icazəsi ver və menyunu aç"
+                : "Yenidən yoxla"}
             </button>
+          )}
+
+          {isInitialLocationStep && (
+            <p className="mt-4 text-xs leading-5 text-neutral-400">
+              Məkan yalnız restorana yaxın olduğunuzu yoxlamaq üçün istifadə olunur.
+            </p>
           )}
         </section>
       </main>
