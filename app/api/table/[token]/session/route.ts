@@ -484,13 +484,7 @@ export async function GET(
         /*
          * 4. Masanın aktiv hesabını tapırıq.
          */
-        const {
-            data: session,
-            error: sessionError,
-        } = await supabaseAdmin
-            .from("dining_sessions")
-            .select(
-                `
+        const sessionSelect = `
           id,
           restaurant_id,
           hall_id,
@@ -505,8 +499,14 @@ export async function GET(
           bill_delivered_at,
           created_at,
           updated_at
-        `,
-            )
+        `;
+
+        const {
+            data: existingDiningSession,
+            error: sessionError,
+        } = await supabaseAdmin
+            .from("dining_sessions")
+            .select(sessionSelect)
             .eq("table_id", table.id)
             .in("status", ACTIVE_SESSION_STATUSES)
             .order("created_at", {
@@ -532,46 +532,91 @@ export async function GET(
             );
         }
 
+        let session = existingDiningSession;
+
         /*
-         * Aktiv hesab yoxdursa boş nəticə qaytarırıq
-         * və köhnə customer_session cookie-sini silirik.
+         * Ofisiantın masanı əvvəlcədən açması artıq tələb olunmur.
+         * Məkan yoxlaması uğurludursa və aktiv hesab yoxdursa,
+         * sistem həmin masa üçün OPEN dining_session yaradır.
+         *
+         * Eyni anda iki telefon sorğu göndərərsə, ikinci insert
+         * unique constraint səbəbilə uğursuz ola bilər. Bu halda
+         * aktiv sessiyanı yenidən oxuyub mövcud olanı istifadə edirik.
          */
         if (!session) {
-            const response = NextResponse.json(
-                {
-                    hasActiveSession: false,
+            const {
+                data: createdDiningSession,
+                error: createDiningSessionError,
+            } = await supabaseAdmin
+                .from("dining_sessions")
+                .insert({
+                    restaurant_id: table.restaurant_id,
+                    hall_id: table.hall_id,
+                    table_id: table.id,
+                    status: "OPEN",
+                    service_fee_percent: 0,
+                    subtotal: 0,
+                    service_fee_amount: 0,
+                    total: 0,
+                })
+                .select(sessionSelect)
+                .maybeSingle();
 
-                    table: {
-                        id: table.id,
-                        number: String(
-                            table.table_number,
-                        ),
-                    },
+            if (
+                createDiningSessionError ||
+                !createdDiningSession
+            ) {
+                console.warn(
+                    "Automatic dining session create warning:",
+                    createDiningSessionError,
+                );
 
-                    session: null,
-                    orders: [],
+                const {
+                    data: concurrentDiningSession,
+                    error: concurrentLookupError,
+                } = await supabaseAdmin
+                    .from("dining_sessions")
+                    .select(sessionSelect)
+                    .eq("table_id", table.id)
+                    .in(
+                        "status",
+                        ACTIVE_SESSION_STATUSES,
+                    )
+                    .order("created_at", {
+                        ascending: false,
+                    })
+                    .limit(1)
+                    .maybeSingle();
 
-                    summary: {
-                        subtotal: 0,
-                        serviceFeePercent: 0,
-                        serviceFeeAmount: 0,
-                        total: 0,
-                    },
+                if (
+                    concurrentLookupError ||
+                    !concurrentDiningSession
+                ) {
+                    console.error(
+                        "Automatic dining session create error:",
+                        createDiningSessionError ??
+                            concurrentLookupError,
+                    );
 
-                    locationCheck,
-                },
-                {
-                    status: 200,
-                    headers: {
-                        "Cache-Control":
-                            "no-store, no-cache, must-revalidate",
-                    },
-                },
-            );
+                    return NextResponse.json(
+                        {
+                            error:
+                                "Masa sessiyası avtomatik yaradıla bilmədi.",
+                        },
+                        {
+                            status: 500,
+                            headers: {
+                                "Cache-Control":
+                                    "no-store",
+                            },
+                        },
+                    );
+                }
 
-
-
-            return response;
+                session = concurrentDiningSession;
+            } else {
+                session = createdDiningSession;
+            }
         }
 
         /*
@@ -589,8 +634,6 @@ export async function GET(
         let newCustomerSessionToken:
             | string
             | null = null;
-
-        let sessionExpired = false;
 
         /*
          * Cookie varsa DB-də axtarırıq.
@@ -683,7 +726,6 @@ export async function GET(
                     }
                 }
 
-                sessionExpired = true;
             }
         }
 
@@ -692,20 +734,6 @@ export async function GET(
          * ümumiyyətlə yoxdursa, hazırkı aktiv hesab
          * üçün yeni customer_session yaradılır.
          */
-        if (sessionExpired) {
-            const response = NextResponse.json(
-                {
-                    error: "Sessiya bitib.",
-                },
-                {
-                    status: 403,
-                },
-            );
-
-
-
-            return response;
-        }
         if (!customerSession) {
             const userAgent =
                 request.headers.get("user-agent");
