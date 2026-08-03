@@ -329,109 +329,156 @@ export async function GET(
             );
         }
 
-        const restaurantLatitude = Number(
-            restaurant.latitude,
-        );
+        /*
+         * Köhnə restoranlarda latitude/longitude NULL ola bilər.
+         * Number(null) === 0 olduğuna görə sadəcə Number() ilə yoxlamaq
+         * həmin restoranı səhvən 0,0 koordinatında hesablayırdı.
+         *
+         * Müvəqqəti uyğunluq qaydası:
+         * - koordinatlar mövcuddursa normal geofence yoxlanılır;
+         * - koordinatlar heç qurulmayıbsa menyu bloklanmır;
+         * - koordinat dəyəri var, amma yanlışdırsa xəta qaytarılır.
+         */
+        const hasRestaurantLatitude =
+            restaurant.latitude !== null &&
+            restaurant.latitude !== undefined &&
+            String(restaurant.latitude).trim() !== "";
 
-        const restaurantLongitude = Number(
-            restaurant.longitude,
-        );
+        const hasRestaurantLongitude =
+            restaurant.longitude !== null &&
+            restaurant.longitude !== undefined &&
+            String(restaurant.longitude).trim() !== "";
+
+        let locationCheck: Record<
+            string,
+            string | number | boolean
+        >;
 
         if (
-            !Number.isFinite(restaurantLatitude) ||
-            !Number.isFinite(restaurantLongitude)
+            !hasRestaurantLatitude ||
+            !hasRestaurantLongitude
         ) {
-            return NextResponse.json(
-                {
-                    error:
-                        "Restoranın məkan məlumatı hələ qurulmayıb.",
-                    code: "RESTAURANT_LOCATION_NOT_CONFIGURED",
-                },
-                {
-                    status: 503,
-                    headers: {
-                        "Cache-Control": "no-store",
+            locationCheck = {
+                configured: false,
+                bypassed: true,
+                reason:
+                    "RESTAURANT_LOCATION_NOT_CONFIGURED",
+            };
+        } else {
+            const restaurantLatitude = Number(
+                restaurant.latitude,
+            );
+
+            const restaurantLongitude = Number(
+                restaurant.longitude,
+            );
+
+            if (
+                !Number.isFinite(restaurantLatitude) ||
+                !Number.isFinite(restaurantLongitude) ||
+                restaurantLatitude < -90 ||
+                restaurantLatitude > 90 ||
+                restaurantLongitude < -180 ||
+                restaurantLongitude > 180
+            ) {
+                return NextResponse.json(
+                    {
+                        error:
+                            "Restoranın məkan məlumatı yanlışdır. Admin paneldən yenilənməlidir.",
+                        code: "RESTAURANT_LOCATION_INVALID",
                     },
-                },
-            );
-        }
-
-        const configuredRadius = Number(
-            restaurant.customer_order_radius_meters,
-        );
-
-        const allowedRadiusMeters =
-            Number.isFinite(configuredRadius) &&
-            configuredRadius > 0
-                ? configuredRadius
-                : DEFAULT_CUSTOMER_ORDER_RADIUS_METERS;
-
-        const restaurantAccuracyValue = Number(
-            restaurant.location_accuracy_meters,
-        );
-
-        const restaurantAccuracyMeters =
-            Number.isFinite(restaurantAccuracyValue) &&
-            restaurantAccuracyValue > 0
-                ? restaurantAccuracyValue
-                : 0;
-
-        const customerAccuracyAllowanceMeters =
-            Math.min(
-                customerAccuracyMeters,
-                MAX_CUSTOMER_ACCURACY_ALLOWANCE_METERS,
-            );
-
-        const restaurantAccuracyAllowanceMeters =
-            Math.min(
-                restaurantAccuracyMeters,
-                MAX_RESTAURANT_ACCURACY_ALLOWANCE_METERS,
-            );
-
-        const effectiveRadiusMeters =
-            allowedRadiusMeters +
-            customerAccuracyAllowanceMeters +
-            restaurantAccuracyAllowanceMeters;
-
-        const distanceMeters =
-            calculateDistanceMeters(
-                customerLatitude,
-                customerLongitude,
-                restaurantLatitude,
-                restaurantLongitude,
-            );
-
-        const locationCheck = {
-            distanceMeters: Math.round(distanceMeters),
-            baseRadiusMeters: Math.round(
-                allowedRadiusMeters,
-            ),
-            effectiveRadiusMeters: Math.round(
-                effectiveRadiusMeters,
-            ),
-            customerAccuracyMeters: Math.round(
-                customerAccuracyMeters,
-            ),
-            restaurantAccuracyMeters: Math.round(
-                restaurantAccuracyMeters,
-            ),
-        };
-
-        if (distanceMeters > effectiveRadiusMeters) {
-            return NextResponse.json(
-                {
-                    error:
-                        "Siz restoranın sifariş zonasından kənardasınız. Restorana yaxınlaşın və yenidən yoxlayın.",
-                    code: "OUTSIDE_ORDER_RADIUS",
-                    ...locationCheck,
-                },
-                {
-                    status: 403,
-                    headers: {
-                        "Cache-Control": "no-store",
+                    {
+                        status: 503,
+                        headers: {
+                            "Cache-Control": "no-store",
+                        },
                     },
-                },
+                );
+            }
+
+            const configuredRadius = Number(
+                restaurant.customer_order_radius_meters,
             );
+
+            const allowedRadiusMeters =
+                Number.isFinite(configuredRadius) &&
+                configuredRadius > 0
+                    ? configuredRadius
+                    : DEFAULT_CUSTOMER_ORDER_RADIUS_METERS;
+
+            const restaurantAccuracyValue = Number(
+                restaurant.location_accuracy_meters,
+            );
+
+            const restaurantAccuracyMeters =
+                Number.isFinite(
+                    restaurantAccuracyValue,
+                ) && restaurantAccuracyValue > 0
+                    ? restaurantAccuracyValue
+                    : 0;
+
+            const customerAccuracyAllowanceMeters =
+                Math.min(
+                    customerAccuracyMeters,
+                    MAX_CUSTOMER_ACCURACY_ALLOWANCE_METERS,
+                );
+
+            const restaurantAccuracyAllowanceMeters =
+                Math.min(
+                    restaurantAccuracyMeters,
+                    MAX_RESTAURANT_ACCURACY_ALLOWANCE_METERS,
+                );
+
+            const effectiveRadiusMeters =
+                allowedRadiusMeters +
+                customerAccuracyAllowanceMeters +
+                restaurantAccuracyAllowanceMeters;
+
+            const distanceMeters =
+                calculateDistanceMeters(
+                    customerLatitude,
+                    customerLongitude,
+                    restaurantLatitude,
+                    restaurantLongitude,
+                );
+
+            locationCheck = {
+                configured: true,
+                bypassed: false,
+                distanceMeters:
+                    Math.round(distanceMeters),
+                baseRadiusMeters: Math.round(
+                    allowedRadiusMeters,
+                ),
+                effectiveRadiusMeters: Math.round(
+                    effectiveRadiusMeters,
+                ),
+                customerAccuracyMeters: Math.round(
+                    customerAccuracyMeters,
+                ),
+                restaurantAccuracyMeters: Math.round(
+                    restaurantAccuracyMeters,
+                ),
+            };
+
+            if (
+                distanceMeters > effectiveRadiusMeters
+            ) {
+                return NextResponse.json(
+                    {
+                        error:
+                            "Siz restoranın sifariş zonasından kənardasınız. Restorana yaxınlaşın və yenidən yoxlayın.",
+                        code: "OUTSIDE_ORDER_RADIUS",
+                        ...locationCheck,
+                    },
+                    {
+                        status: 403,
+                        headers: {
+                            "Cache-Control": "no-store",
+                        },
+                    },
+                );
+            }
         }
 
         /*
