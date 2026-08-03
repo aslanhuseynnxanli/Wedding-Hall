@@ -345,3 +345,249 @@ export async function sendNewOrderNotification(
     tokenCount: tokens.length,
   };
 }
+type SendKitchenReadyNotificationInput = {
+  restaurantId: string;
+  tableId: string;
+  orderId: string;
+  itemId: string;
+  itemName: string;
+  waiterId?: string | null;
+};
+
+async function getWaiterRecipientUserIds(
+  restaurantId: string,
+  tableId: string,
+  waiterId?: string | null,
+) {
+  const recipientUserIds = new Set<string>();
+
+  /*
+   * Sifarişdə birbaşa waiter_id varsa,
+   * birinci onu əlavə edirik.
+   */
+  if (
+    typeof waiterId === "string" &&
+    waiterId.trim().length > 0
+  ) {
+    recipientUserIds.add(waiterId);
+  }
+
+  /*
+   * Masa üçün təyin edilmiş ofisiantı tapırıq.
+   */
+  const {
+    data: assignmentRows,
+    error: assignmentError,
+  } = await supabaseAdmin
+    .from("waiter_table_assignments")
+    .select("waiter_id")
+    .eq("restaurant_id", restaurantId)
+    .eq("table_id", tableId);
+
+  if (assignmentError) {
+    console.error(
+      "Kitchen ready waiter assignment lookup error:",
+      assignmentError,
+    );
+  }
+
+  for (const row of assignmentRows ?? []) {
+    if (
+      typeof row.waiter_id === "string" &&
+      row.waiter_id.length > 0
+    ) {
+      recipientUserIds.add(row.waiter_id);
+    }
+  }
+
+  /*
+   * Birbaşa ofisiant tapılmasa, restoranın
+   * ofisiant rolundakı istifadəçilərini götürürük.
+   */
+  if (recipientUserIds.size === 0) {
+    const {
+      data: roleRows,
+      error: roleError,
+    } = await supabaseAdmin
+      .from("user_roles")
+      .select(`
+        user_id,
+        roles (
+          name
+        )
+      `)
+      .eq("restaurant_id", restaurantId);
+
+    if (roleError) {
+      console.error(
+        "Kitchen ready waiter role lookup error:",
+        roleError,
+      );
+    }
+
+    for (const rawRow of roleRows ?? []) {
+      const row =
+        rawRow as unknown as RestaurantRoleRow;
+
+      const roleName = getRoleName(row);
+
+      if (
+        row.user_id &&
+        roleName &&
+        isWaiterRole(roleName)
+      ) {
+        recipientUserIds.add(row.user_id);
+      }
+    }
+  }
+
+  return Array.from(recipientUserIds);
+}
+
+async function sendKitchenReadyBatch(
+  tokens: string[],
+  input: SendKitchenReadyNotificationInput,
+) {
+  const messages = tokens.map((token) => ({
+    to: token,
+    title: "Sifariş hazırdır",
+    body: `${input.itemName} hazırdır. Masaya təqdim edə bilərsiniz.`,
+    sound: NOTIFICATION_SOUND,
+    channelId: ANDROID_CHANNEL_ID,
+    priority: "high" as const,
+    data: {
+      type: "KITCHEN_ITEM_READY",
+      restaurantId: input.restaurantId,
+      tableId: input.tableId,
+      orderId: input.orderId,
+      itemId: input.itemId,
+    },
+  }));
+
+  const response = await fetch(EXPO_PUSH_URL, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Accept-Encoding": "gzip, deflate",
+    },
+    body: JSON.stringify(messages),
+  });
+
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ExpoPushResponse | null;
+
+  if (!response.ok) {
+    throw new Error(
+      payload?.errors?.[0]?.message ??
+        `Expo push request failed: ${response.status}`,
+    );
+  }
+
+  const invalidTokens: string[] = [];
+
+  (payload?.data ?? []).forEach(
+    (ticket, index) => {
+      if (ticket.status !== "error") {
+        return;
+      }
+
+      console.error(
+        "Kitchen ready Expo push ticket error:",
+        {
+          token: tokens[index],
+          message: ticket.message,
+          details: ticket.details,
+        },
+      );
+
+      if (
+        ticket.details?.error ===
+        "DeviceNotRegistered"
+      ) {
+        invalidTokens.push(tokens[index]);
+      }
+    },
+  );
+
+  await deactivateInvalidTokens(invalidTokens);
+}
+
+export async function sendKitchenReadyNotification(
+  input: SendKitchenReadyNotificationInput,
+) {
+  const userIds =
+    await getWaiterRecipientUserIds(
+      input.restaurantId,
+      input.tableId,
+      input.waiterId,
+    );
+
+  if (!userIds.length) {
+    console.warn(
+      "Kitchen ready push skipped: waiter not found.",
+      input,
+    );
+
+    return {
+      recipientCount: 0,
+      tokenCount: 0,
+    };
+  }
+
+  const {
+    data: tokenRows,
+    error: tokenError,
+  } = await supabaseAdmin
+    .from("device_push_tokens")
+    .select("expo_push_token")
+    .in("user_id", userIds)
+    .eq("is_active", true);
+
+  if (tokenError) {
+    throw tokenError;
+  }
+
+  const tokens = Array.from(
+    new Set(
+      (tokenRows ?? [])
+        .map((row) => row.expo_push_token)
+        .filter(
+          (token): token is string =>
+            typeof token === "string" &&
+            isExpoPushToken(token),
+        ),
+    ),
+  );
+
+  if (!tokens.length) {
+    console.warn(
+      "Kitchen ready push skipped: waiter token not found.",
+      {
+        ...input,
+        userIds,
+      },
+    );
+
+    return {
+      recipientCount: userIds.length,
+      tokenCount: 0,
+    };
+  }
+
+  for (const tokenBatch of chunkArray(
+    tokens,
+    EXPO_BATCH_SIZE,
+  )) {
+    await sendKitchenReadyBatch(
+      tokenBatch,
+      input,
+    );
+  }
+
+  return {
+    recipientCount: userIds.length,
+    tokenCount: tokens.length,
+  };
+}
