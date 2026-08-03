@@ -1,3 +1,4 @@
+import { sendNewOrderNotification } from "@/lib/push/sendRestaurantPush";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import {
   NextRequest,
@@ -90,7 +91,7 @@ export async function POST(
       error: tableError,
     } = await supabaseAdmin
       .from("restaurant_tables")
-      .select("id")
+      .select("id, restaurant_id")
       .eq("qr_token", normalizedToken)
       .eq("is_active", true)
       .maybeSingle();
@@ -446,6 +447,38 @@ export async function POST(
       console.error(
         "Customer order last_seen update error:",
         lastSeenError,
+      );
+    }
+
+    /*
+     * Sifariş uğurla yarandıqdan sonra aidiyyəti
+     * ofisiant və mətbəx istifadəçilərinə remote
+     * push notification göndəririk.
+     *
+     * Push xətası sifarişi ləğv etmir.
+     */
+    try {
+      const itemCount = normalizedItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      );
+
+      const pushResult =
+        await sendNewOrderNotification({
+          restaurantId: table.restaurant_id,
+          tableId: table.id,
+          orderId: result.order_id,
+          itemCount,
+        });
+
+      console.log(
+        "New order push result:",
+        pushResult,
+      );
+    } catch (pushError) {
+      console.error(
+        "New order push notification error:",
+        pushError,
       );
     }
 
